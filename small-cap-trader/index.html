@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Small Cap Trader</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0d1117; color:#e6edf3; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace; font-size:13px; min-height:100vh; }
+
+  /* Header */
+  #header { background:#161b22; border-bottom:1px solid #30363d; padding:14px 24px; display:flex; align-items:center; justify-content:space-between; }
+  .logo { font-size:15px; font-weight:700; color:#58a6ff; }
+  .logo span { color:#8b949e; font-weight:400; font-size:12px; margin-left:8px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700; background:#21262d; color:#8b949e; margin-left:8px; }
+  .badge.listed { background:rgba(63,185,80,.15); color:#3fb950; }
+
+  .controls { display:flex; align-items:center; gap:10px; }
+  .session-group { display:flex; background:#21262d; border:1px solid #30363d; border-radius:6px; overflow:hidden; }
+  .sess-btn { padding:5px 14px; background:transparent; border:none; border-right:1px solid #30363d; color:#8b949e; cursor:pointer; font-size:12px; font-weight:600; transition:all .12s; }
+  .sess-btn:last-child { border-right:none; }
+  .sess-btn:hover { background:#30363d; color:#e6edf3; }
+  .sess-btn.active { background:#1f6feb; color:#fff; }
+
+  .date-select { background:#21262d; border:1px solid #30363d; border-radius:6px; padding:5px 10px; color:#e6edf3; font-size:12px; outline:none; cursor:pointer; }
+  .date-select:focus { border-color:#58a6ff; }
+
+  .icon-btn { padding:5px 12px; background:#21262d; border:1px solid #30363d; border-radius:6px; color:#8b949e; cursor:pointer; font-size:12px; transition:all .12s; }
+  .icon-btn:hover { border-color:#58a6ff; color:#58a6ff; }
+  .scan-btn { background:#238636; border-color:#2ea043; color:#fff; }
+  .scan-btn:hover { background:#2ea043; color:#fff; border-color:#2ea043; }
+  .scan-btn:disabled { opacity:.5; cursor:not-allowed; }
+
+  /* Status */
+  #status { padding:6px 24px; background:#161b22; border-bottom:1px solid #30363d; color:#8b949e; font-size:11px; display:flex; align-items:center; gap:14px; }
+  .dot { width:6px; height:6px; border-radius:50%; background:#3fb950; flex-shrink:0; }
+  .dot.spin { background:#d29922; animation:blink 1s infinite; }
+  @keyframes blink { 0%,100%{opacity:1}50%{opacity:.3} }
+
+  /* Tabs */
+  .tabs { display:flex; border-bottom:1px solid #30363d; padding:0 24px; background:#0d1117; }
+  .tab { padding:10px 18px; font-size:12px; font-weight:600; color:#8b949e; cursor:pointer; border-bottom:2px solid transparent; transition:all .12s; }
+  .tab:hover { color:#e6edf3; }
+  .tab.active { color:#58a6ff; border-bottom-color:#58a6ff; }
+
+  /* Table */
+  .table-wrap { padding:0 24px 24px; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  thead th { background:#161b22; padding:9px 12px; text-align:left; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.7px; color:#8b949e; border-bottom:2px solid #30363d; cursor:pointer; user-select:none; white-space:nowrap; }
+  thead th:hover { color:#e6edf3; }
+  thead th.sorted { color:#58a6ff; }
+  tbody tr { border-bottom:1px solid #21262d; transition:background .1s; cursor:pointer; }
+  tbody tr:hover { background:#161b22; }
+  td { padding:8px 12px; vertical-align:middle; white-space:nowrap; }
+
+  .ticker { font-weight:700; font-size:12px; color:#58a6ff; font-family:monospace; }
+  .ticker:hover { text-decoration:underline; }
+  .co-name { font-size:11px; color:#8b949e; margin-top:1px; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+  .exch-badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:600; background:#21262d; color:#8b949e; }
+
+  .num { text-align:right; font-variant-numeric:tabular-nums; font-size:12px; }
+  .pos { color:#3fb950; } .neg { color:#f85149; } .neu { color:#8b949e; }
+  .rvol-high { color:#f0883e; font-weight:700; }
+
+  .float-badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; }
+  .float-micro { background:rgba(248,81,73,.15); color:#f85149; }   /* <1M */
+  .float-low   { background:rgba(240,136,62,.15); color:#f0883e; }  /* 1-3M */
+  .float-mid   { background:rgba(210,153,34,.15); color:#d29922; }  /* 3-7M */
+  .float-norm  { background:rgba(139,148,158,.12); color:#8b949e; } /* 7-10M */
+
+  .empty-row td { text-align:center; padding:60px; color:#484f58; }
+
+  /* Loading overlay */
+  #overlay { position:fixed; inset:0; background:rgba(13,17,23,.88); display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px; z-index:900; }
+  .spinner { width:34px; height:34px; border:3px solid #30363d; border-top-color:#58a6ff; border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* Stats bar */
+  #statsBar { display:flex; gap:24px; padding:12px 24px; background:#0d1117; border-bottom:1px solid #21262d; flex-wrap:wrap; }
+  .stat { text-align:center; }
+  .stat-val { font-size:18px; font-weight:700; color:#e6edf3; }
+  .stat-lbl { font-size:10px; color:#8b949e; margin-top:2px; text-transform:uppercase; letter-spacing:.5px; }
+
+  /* Search */
+  .search-box { background:#21262d; border:1px solid #30363d; border-radius:6px; padding:5px 11px; color:#e6edf3; font-size:12px; width:180px; outline:none; }
+  .search-box:focus { border-color:#58a6ff; }
+  .search-box::placeholder { color:#484f58; }
+
+  /* Toast */
+  #toast { position:fixed; bottom:20px; right:24px; background:#1f6feb; color:#fff; font-size:12px; padding:8px 14px; border-radius:6px; z-index:1000; display:none; align-items:center; gap:8px; box-shadow:0 4px 12px rgba(0,0,0,.4); }
+  #toast.show { display:flex; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div class="logo">
+    Small Cap Trader
+    <span>Float ≤ 10M · US Listed Only <span class="badge listed">NO OTC</span></span>
+  </div>
+  <div class="controls">
+    <input class="search-box" id="searchInput" placeholder="Search ticker or name…">
+    <select class="date-select" id="dateSelect"><option value="">— Select date —</option></select>
+    <div class="session-group" id="sessionGroup">
+      <button class="sess-btn" data-s="premarket">Pre</button>
+      <button class="sess-btn active" data-s="open">Open</button>
+      <button class="sess-btn" data-s="eod">EOD</button>
+      <button class="sess-btn" data-s="postmarket">PM</button>
+    </div>
+    <button class="icon-btn scan-btn" id="scanBtn">▶ Scan Now</button>
+  </div>
+</div>
+
+<div id="status">
+  <span class="dot" id="dot"></span>
+  <span id="statusText">Ready</span>
+  <span id="lastUpdated" style="color:#484f58"></span>
+</div>
+
+<div id="statsBar" style="display:none">
+  <div class="stat"><div class="stat-val" id="s-count">—</div><div class="stat-lbl">Stocks</div></div>
+  <div class="stat"><div class="stat-val pos" id="s-gainers">—</div><div class="stat-lbl">Gainers</div></div>
+  <div class="stat"><div class="stat-val neg" id="s-losers">—</div><div class="stat-lbl">Losers</div></div>
+  <div class="stat"><div class="stat-val rvol-high" id="s-rvol5">—</div><div class="stat-lbl">RVol ≥ 5×</div></div>
+  <div class="stat"><div class="stat-val float-micro" id="s-micro">—</div><div class="stat-lbl">Float &lt; 1M</div></div>
+  <div class="stat"><div class="stat-val" id="s-topMover">—</div><div class="stat-lbl">Top Mover</div></div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="scanner">Scanner</div>
+  <div class="tab" data-tab="continuations">🔁 Continuations</div>
+  <div class="tab" data-tab="pivots">📍 Pivots</div>
+  <div class="tab" data-tab="keywords">🔑 Keywords</div>
+  <div class="tab" data-tab="history">Ticker History</div>
+</div>
+
+<!-- Scanner Tab -->
+<div id="tabScanner">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-col="ticker">#</th>
+          <th data-col="ticker">Ticker</th>
+          <th data-col="change_pct" class="sorted">Chg % <span>▼</span></th>
+          <th data-col="gap_pct">Gap %</th>
+          <th data-col="price" class="num">Price</th>
+          <th data-col="volume" class="num">Volume</th>
+          <th data-col="rvol" class="num">RVol</th>
+          <th data-col="float_shares" class="num">Float</th>
+          <th data-col="mcap" class="num">Mkt Cap</th>
+          <th data-col="high" class="num">High</th>
+          <th data-col="low" class="num">Low</th>
+          <th data-col="pct_of_52w_high" class="num">vs 52W H</th>
+          <th>Sector</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Continuations Tab -->
+<div id="tabContinuations" style="display:none">
+  <div style="padding:12px 24px; border-bottom:1px solid #21262d; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+    <span style="font-size:11px;color:#8b949e">Showing candidates from</span>
+    <select class="date-select" id="contDateSelect"><option value="">— Select date —</option></select>
+    <span id="contSummary" style="font-size:11px;color:#8b949e"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Ticker</th>
+        <th>Float</th>
+        <th>Catalysts</th>
+        <th class="num">PM Chg%</th>
+        <th class="num">PM RVol</th>
+        <th class="num">PM Price</th>
+        <th class="num">Next Open</th>
+        <th class="num">Next Chg%</th>
+        <th class="num">Next RVol</th>
+        <th>Continued?</th>
+        <th class="num">Score</th>
+      </tr></thead>
+      <tbody id="contBody"><tr class="empty-row"><td colspan="11">Select a date to view continuation candidates.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Pivots Tab -->
+<div id="tabPivots" style="display:none">
+  <div style="padding:12px 24px; border-bottom:1px solid #21262d; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <input class="search-box" id="pivotTicker" placeholder="Enter ticker (e.g. EFOI)…" style="width:160px; text-transform:uppercase;">
+    <input class="search-box" id="pivotPrice" placeholder="Current price (optional)" style="width:160px;" type="number" step="0.01">
+    <button class="icon-btn scan-btn" id="calcPivotBtn">📍 Calculate Pivots</button>
+    <button class="icon-btn" id="drawPivotBtn" style="display:none;border-color:#d29922;color:#d29922;">📊 Draw on TradingView</button>
+    <span id="pivotMeta" style="font-size:11px;color:#8b949e"></span>
+  </div>
+
+  <!-- Visual pivot chart -->
+  <div id="pivotChart" style="display:none; padding:16px 24px; border-bottom:1px solid #21262d;">
+    <div style="font-size:11px;color:#8b949e;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;">Price Map — Resistance above · Support below · Current price = white line</div>
+    <div id="pivotBar" style="position:relative; height:200px; background:#161b22; border:1px solid #30363d; border-radius:6px; overflow:hidden;"></div>
+  </div>
+
+  <!-- Pivot table -->
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Price Level</th>
+        <th>Role</th>
+        <th>Strength</th>
+        <th class="num">Touches</th>
+        <th class="num">High-Vol Touches</th>
+        <th class="num">Avg RVol</th>
+        <th class="num">Max RVol</th>
+        <th class="num">% Away</th>
+        <th>Types</th>
+        <th>Last Seen</th>
+      </tr></thead>
+      <tbody id="pivotBody"><tr class="empty-row"><td colspan="10">Enter a ticker to calculate pivot levels.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Keywords Tab -->
+<div id="tabKeywords" style="display:none">
+  <div style="padding:12px 24px; border-bottom:1px solid #21262d; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <span id="kwStats" style="font-size:11px;color:#8b949e"></span>
+    <input class="search-box" id="kwSearch" placeholder="Filter keywords…" style="width:180px;">
+    <select class="date-select" id="kwCatFilter"><option value="">All categories</option></select>
+    <select class="date-select" id="kwSentFilter"><option value="">All sentiment</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="neutral">Neutral</option></select>
+    <button class="icon-btn" id="addKwBtn" style="border-color:#2ea043;color:#3fb950;">+ Add Keyword</button>
+  </div>
+
+  <!-- Add keyword form (hidden by default) -->
+  <div id="addKwForm" style="display:none; padding:12px 24px; background:#161b22; border-bottom:1px solid #30363d; display:none; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+    <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:3px">PHRASE</label><input class="search-box" id="kwPhrase" placeholder="e.g. fda approval" style="width:180px;"></div>
+    <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:3px">CATEGORY</label><input class="search-box" id="kwCat" placeholder="e.g. fda, earnings" style="width:120px;"></div>
+    <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:3px">SENTIMENT</label>
+      <select class="date-select" id="kwSent"><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="neutral">Neutral</option></select>
+    </div>
+    <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:3px">SCORE (1-10)</label><input class="search-box" id="kwScore" type="number" min="1" max="10" value="5" style="width:70px;"></div>
+    <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:3px">NOTES</label><input class="search-box" id="kwNotes" placeholder="Why does this matter?" style="width:240px;"></div>
+    <button class="icon-btn scan-btn" id="saveKwBtn">Save</button>
+    <button class="icon-btn" id="cancelKwBtn">Cancel</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Phrase</th>
+        <th>Category</th>
+        <th>Sentiment</th>
+        <th class="num">Base Score</th>
+        <th class="num">Occurrences</th>
+        <th class="num">Hit Rate</th>
+        <th class="num">Avg Move</th>
+        <th>Notes</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="kwBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- History Tab -->
+<div id="tabHistory" style="display:none">
+  <div style="padding:16px 24px; border-bottom:1px solid #21262d; display:flex; gap:10px; align-items:center;">
+    <input class="search-box" id="histSearch" placeholder="Search all tickers…" style="width:220px;">
+    <span style="font-size:11px;color:#8b949e" id="histCount"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Ticker</th><th>Name</th>
+        <th class="num">Appearances</th>
+        <th class="num">Days Seen</th>
+        <th>Last Seen</th>
+      </tr></thead>
+      <tbody id="histBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="overlay">
+  <div class="spinner"></div>
+  <div style="color:#8b949e;font-size:12px">Loading…</div>
+</div>
+
+<div id="toast"><span id="toastMsg"></span></div>
+
+<script>
+// ── State
+let scanData   = [];
+let histData   = [];
+let sortCol    = 'change_pct';
+let sortDir    = -1;
+let filterText = '';
+let activeSession = 'open';
+let activeDate    = '';
+
+// ── Helpers
+const $ = id => document.getElementById(id);
+function fmt(v, dec=2)  { return v == null ? '—' : v.toFixed(dec); }
+function fmtPct(v)      { if (v == null) return '—'; return (v>0?'+':'')+v.toFixed(2)+'%'; }
+function cls(v)         { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu'; }
+function fmtNum(v) {
+  if (!v) return '—';
+  if (v>=1e9) return '$'+(v/1e9).toFixed(2)+'B';
+  if (v>=1e6) return '$'+(v/1e6).toFixed(1)+'M';
+  if (v>=1e3) return '$'+(v/1e3).toFixed(0)+'K';
+  return '$'+v;
+}
+function fmtShares(v) {
+  if (!v) return '—';
+  if (v>=1e6) return (v/1e6).toFixed(2)+'M';
+  if (v>=1e3) return (v/1e3).toFixed(0)+'K';
+  return v;
+}
+function floatClass(v) {
+  if (!v) return 'float-norm';
+  if (v < 1e6) return 'float-micro';
+  if (v < 3e6) return 'float-low';
+  if (v < 7e6) return 'float-mid';
+  return 'float-norm';
+}
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function toast(msg, ms=2500) {
+  $('toastMsg').textContent = msg;
+  $('toast').classList.add('show');
+  setTimeout(() => $('toast').classList.remove('show'), ms);
+}
+
+function setLoading(on, msg='Loading…') {
+  $('overlay').style.display = on ? 'flex' : 'none';
+  if (on) { $('dot').classList.add('spin'); $('statusText').textContent = msg; }
+}
+
+// ── Render scanner table
+function renderScanner() {
+  let data = scanData;
+  if (filterText) {
+    const q = filterText.toLowerCase();
+    data = data.filter(d => (d.ticker||'').toLowerCase().includes(q) || (d.name||'').toLowerCase().includes(q));
+  }
+  data = [...data].sort((a,b) => sortDir * ((b[sortCol]||0)-(a[sortCol]||0)));
+
+  // Stats bar
+  $('statsBar').style.display = 'flex';
+  $('s-count').textContent   = data.length;
+  $('s-gainers').textContent = data.filter(d=>d.change_pct>0).length;
+  $('s-losers').textContent  = data.filter(d=>d.change_pct<0).length;
+  $('s-rvol5').textContent   = data.filter(d=>d.rvol>=5).length;
+  $('s-micro').textContent   = data.filter(d=>d.float_shares<1e6).length;
+  const top = [...data].sort((a,b)=>Math.abs(b.change_pct||0)-Math.abs(a.change_pct||0))[0];
+  $('s-topMover').textContent = top ? `${top.ticker} ${fmtPct(top.change_pct)}` : '—';
+  $('s-topMover').className = 'stat-val ' + (top ? cls(top.change_pct) : '');
+
+  if (!data.length) {
+    $('tbody').innerHTML = '<tr class="empty-row"><td colspan="13">No stocks found for this scan.</td></tr>';
+    return;
+  }
+
+  $('tbody').innerHTML = data.map((d, i) => `
+  <tr data-ticker="${esc(d.ticker)}">
+    <td class="num neu" style="font-size:11px">${i+1}</td>
+    <td>
+      <div class="ticker">${esc(d.ticker)}</div>
+      <div class="co-name">${esc(d.name||'')}</div>
+    </td>
+    <td class="num ${cls(d.change_pct)}">${fmtPct(d.change_pct)}</td>
+    <td class="num ${cls(d.gap_pct)}">${fmtPct(d.gap_pct)}</td>
+    <td class="num">$${fmt(d.price)}</td>
+    <td class="num">${fmtShares(d.volume)}</td>
+    <td class="num ${d.rvol>=5?'rvol-high':''}">${d.rvol?d.rvol.toFixed(1)+'×':'—'}</td>
+    <td class="num"><span class="float-badge ${floatClass(d.float_shares)}">${fmtShares(d.float_shares)}</span></td>
+    <td class="num">${fmtNum(d.mcap)}</td>
+    <td class="num pos">${d.high?'$'+fmt(d.high):'—'}</td>
+    <td class="num neg">${d.low?'$'+fmt(d.low):'—'}</td>
+    <td class="num ${d.pct_of_52w_high>=90?'pos':d.pct_of_52w_high<50?'neg':'neu'}">${d.pct_of_52w_high?d.pct_of_52w_high+'%':'—'}</td>
+    <td style="color:#8b949e;font-size:11px">${esc(d.sector||'—')}</td>
+  </tr>`).join('');
+
+  $('tbody').querySelectorAll('tr[data-ticker]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      const ticker = row.dataset.ticker;
+      // Ctrl+click or right-click → open pivots tab
+      if (e.ctrlKey || e.metaKey) {
+        const stock = scanData.find(s=>s.ticker===ticker);
+        $('pivotTicker').value = ticker;
+        if (stock?.price) $('pivotPrice').value = stock.price.toFixed(2);
+        // Switch to pivots tab
+        document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+        document.querySelector('[data-tab="pivots"]').classList.add('active');
+        ['tabScanner','tabContinuations','tabPivots','tabKeywords','tabHistory'].forEach(id=>$(id).style.display='none');
+        $('tabPivots').style.display='';
+        calcPivots();
+      } else {
+        openInTV(ticker);
+      }
+    });
+  });
+}
+
+// ── Render history tab
+function renderHistory(filter='') {
+  let data = histData;
+  if (filter) {
+    const q = filter.toLowerCase();
+    data = data.filter(d => (d.ticker||'').toLowerCase().includes(q) || (d.name||'').toLowerCase().includes(q));
+  }
+  $('histCount').textContent = `${data.length} tickers`;
+  if (!data.length) {
+    $('histBody').innerHTML = '<tr class="empty-row"><td colspan="5">No data yet. Run some scans first.</td></tr>';
+    return;
+  }
+  $('histBody').innerHTML = data.map(d => `
+  <tr>
+    <td><span class="ticker">${esc(d.ticker)}</span></td>
+    <td style="color:#8b949e;font-size:12px">${esc(d.name||'')}</td>
+    <td class="num">${d.appearances}</td>
+    <td class="num">${d.days}</td>
+    <td style="color:#8b949e;font-size:11px">${d.dates[0]||'—'}</td>
+  </tr>`).join('');
+}
+
+// ── Fetch & load
+async function loadDates() {
+  const dates = await fetch('/api/dates').then(r=>r.json());
+  const sel = $('dateSelect');
+  sel.innerHTML = '<option value="">— latest —</option>' +
+    dates.map(d => `<option value="${d.date}">${d.date}</option>`).join('');
+  if (dates.length) {
+    activeDate = dates[0].date;
+    sel.value = '';
+  }
+}
+
+async function loadScan() {
+  setLoading(true, 'Fetching scan data…');
+  try {
+    const params = new URLSearchParams({ session: activeSession });
+    if (activeDate) params.set('date', activeDate);
+    const res  = await fetch('/api/data?' + params);
+    if (!res.ok) throw new Error((await res.json()).error);
+    const rec  = await res.json();
+    scanData   = rec.stocks || [];
+    $('dot').classList.remove('spin');
+    $('statusText').textContent = `${scanData.length} stocks · ${rec.session} · ${rec.date}`;
+    $('lastUpdated').textContent = 'Updated ' + new Date(rec.scanned_at).toLocaleTimeString();
+    renderScanner();
+  } catch (e) {
+    $('dot').classList.remove('spin');
+    $('statusText').textContent = 'No data: ' + e.message;
+    scanData = [];
+    renderScanner();
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function loadHistory() {
+  setLoading(true, 'Loading ticker history…');
+  try {
+    histData = await fetch('/api/tickers').then(r=>r.json());
+    renderHistory($('histSearch').value);
+  } catch(e) {
+    $('histBody').innerHTML = '<tr class="empty-row"><td colspan="5">Error: '+e.message+'</td></tr>';
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function triggerScan() {
+  const btn = $('scanBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning…';
+  setLoading(true, 'Running live scan…');
+  try {
+    const res = await fetch('/api/scan?session=' + activeSession);
+    const rec = await res.json();
+    if (rec.error) throw new Error(rec.error);
+    toast(`✅ Scanned ${rec.count} stocks`);
+    await loadDates();
+    scanData = rec.stocks || [];
+    $('statusText').textContent = `${scanData.length} stocks · live scan`;
+    $('lastUpdated').textContent = 'Just now';
+    renderScanner();
+  } catch(e) {
+    toast('❌ ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Scan Now';
+    setLoading(false);
+  }
+}
+
+async function openInTV(ticker) {
+  toast(`Opening ${ticker} in TradingView…`);
+  try {
+    const res = await fetch('/api/open?ticker=' + encodeURIComponent(ticker));
+    const j   = await res.json();
+    if (!j.success) throw new Error(j.error);
+    toast(`✓ ${ticker} opened`);
+  } catch(e) {
+    toast('⚠ ' + e.message);
+  }
+}
+
+// ── Wire up controls
+$('sessionGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.sess-btn');
+  if (!btn) return;
+  activeSession = btn.dataset.s;
+  $('sessionGroup').querySelectorAll('.sess-btn').forEach(b => b.classList.toggle('active', b===btn));
+  loadScan();
+});
+
+$('dateSelect').addEventListener('change', e => {
+  activeDate = e.target.value;
+  loadScan();
+});
+
+$('scanBtn').addEventListener('click', triggerScan);
+
+$('searchInput').addEventListener('input', e => { filterText = e.target.value; renderScanner(); });
+
+
+document.querySelectorAll('thead th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol===col) sortDir*=-1; else { sortCol=col; sortDir=-1; }
+    document.querySelectorAll('thead th').forEach(t => {
+      t.classList.remove('sorted');
+      const sp = t.querySelector('span');
+      if (sp) sp.textContent = '▼';
+    });
+    th.classList.add('sorted');
+    const sp = th.querySelector('span') || (() => { const s=document.createElement('span'); th.appendChild(s); return s; })();
+    sp.textContent = sortDir===-1 ? '▼' : '▲';
+    renderScanner();
+  });
+});
+
+$('histSearch').addEventListener('input', e => renderHistory(e.target.value));
+
+// ── Pivots tab
+let pivotData = null;
+
+async function calcPivots() {
+  const ticker = $('pivotTicker').value.trim().toUpperCase();
+  const price  = parseFloat($('pivotPrice').value) || null;
+  if (!ticker) return;
+
+  $('pivotMeta').textContent = 'Calculating…';
+  $('pivotBody').innerHTML   = '<tr class="empty-row"><td colspan="10">Calculating…</td></tr>';
+  $('pivotChart').style.display = 'none';
+  $('drawPivotBtn').style.display = 'none';
+
+  const params = new URLSearchParams({ ticker });
+  if (price) params.set('price', price);
+  const res  = await fetch('/api/pivots?' + params);
+  pivotData  = await res.json();
+
+  if (pivotData.error) {
+    $('pivotMeta').textContent = '❌ ' + pivotData.error;
+    return;
+  }
+
+  $('pivotMeta').textContent = `${pivotData.pivots.length} pivots · from ${pivotData.scans_used} scans · price: $${pivotData.current_price?.toFixed(2)||'—'}`;
+  $('drawPivotBtn').style.display = pivotData.pivots.length ? '' : 'none';
+
+  renderPivots(pivotData);
+  renderPivotChart(pivotData);
+}
+
+async function drawPivots() {
+  if (!pivotData) return;
+  const ticker = pivotData.ticker;
+  const price  = parseFloat($('pivotPrice').value) || pivotData.current_price || null;
+  toast(`Drawing ${pivotData.pivots.length} pivots for ${ticker}…`);
+  const params = new URLSearchParams({ ticker });
+  if (price) params.set('price', price);
+  const res = await fetch('/api/draw-pivots?' + params);
+  const j   = await res.json();
+  if (j.error) { toast('❌ ' + j.error); return; }
+  toast(`✅ Drew ${j.drawn} pivot lines on TradingView`);
+}
+
+function renderPivots(data) {
+  const { pivots, current_price } = data;
+  if (!pivots.length) {
+    $('pivotBody').innerHTML = '<tr class="empty-row"><td colspan="10">No pivots — need more scan history for this ticker.</td></tr>';
+    return;
+  }
+
+  const strColor = { strong:'#3fb950', moderate:'#d29922', weak:'#8b949e' };
+  const roleColor= { resistance:'#f85149', support:'#3fb950', key_level:'#d29922' };
+
+  $('pivotBody').innerHTML = pivots.map(p => {
+    const away    = p.position?.pct_away;
+    const awayStr = away != null ? `${away>0?'+':''}${away.toFixed(1)}%` : '—';
+    const awayCol = away != null ? (away > 0 ? 'neg' : 'pos') : 'neu';
+    return `
+    <tr>
+      <td style="font-weight:700;font-size:14px;font-family:monospace;color:#e6edf3">$${p.price.toFixed(4)}</td>
+      <td><span style="color:${roleColor[p.role]||'#8b949e'};font-weight:700;font-size:11px;text-transform:uppercase">${p.role.replace('_',' ')}</span></td>
+      <td><span style="color:${strColor[p.strength]};font-weight:700;font-size:11px">
+        ${'●'.repeat(p.strength==='strong'?3:p.strength==='moderate'?2:1)}${'○'.repeat(p.strength==='strong'?0:p.strength==='moderate'?1:2)}
+        ${p.strength}</span></td>
+      <td class="num" style="font-weight:700">${p.touches}</td>
+      <td class="num" style="color:${p.high_vol_touches>=3?'#f0883e':'#8b949e'};font-weight:${p.high_vol_touches>=3?700:400}">${p.high_vol_touches}</td>
+      <td class="num">${p.avg_rvol?p.avg_rvol.toFixed(1)+'×':'—'}</td>
+      <td class="num ${p.max_rvol>=5?'rvol-high':''}">${p.max_rvol?p.max_rvol.toFixed(1)+'×':'—'}</td>
+      <td class="num ${awayCol}">${awayStr}</td>
+      <td style="font-size:10px;color:#8b949e">${(p.labels||p.types||[]).join(', ')}</td>
+      <td style="font-size:11px;color:#484f58">${p.last_seen?p.last_seen.slice(0,10):'—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPivotChart(data) {
+  const { pivots, current_price } = data;
+  if (!pivots.length || !current_price) return;
+
+  const bar = $('pivotBar');
+  bar.innerHTML = '';
+  $('pivotChart').style.display = '';
+
+  const prices  = pivots.map(p => p.price);
+  const allPrices = [...prices, current_price];
+  const minP    = Math.min(...allPrices) * 0.97;
+  const maxP    = Math.max(...allPrices) * 1.03;
+  const range   = maxP - minP;
+
+  const pctY = price => (1 - (price - minP) / range) * 100;
+
+  // Draw pivot lines
+  const roleColor = { resistance:'#f85149', support:'#3fb950', key_level:'#d29922' };
+  const strWidth  = { strong:2, moderate:1.5, weak:1 };
+  const strOpacity= { strong:1, moderate:.75, weak:.5 };
+
+  pivots.forEach(p => {
+    const y     = pctY(p.price);
+    const color = roleColor[p.role] || '#8b949e';
+    const line  = document.createElement('div');
+    line.style.cssText = `
+      position:absolute; left:0; right:0; top:${y}%;
+      border-top:${strWidth[p.strength]}px ${p.strength==='weak'?'dashed':'solid'} ${color};
+      opacity:${strOpacity[p.strength]};
+    `;
+    const lbl = document.createElement('div');
+    lbl.style.cssText = `
+      position:absolute; right:8px; top:-9px;
+      font-size:10px; font-weight:700; color:${color};
+      background:#161b22; padding:0 4px;
+    `;
+    lbl.textContent = `$${p.price.toFixed(2)} (${p.touches}T)`;
+    line.appendChild(lbl);
+    bar.appendChild(line);
+  });
+
+  // Draw current price line
+  const curY = pctY(current_price);
+  const cur  = document.createElement('div');
+  cur.style.cssText = `position:absolute;left:0;right:0;top:${curY}%;border-top:2px solid #fff;z-index:10;`;
+  const curLbl = document.createElement('div');
+  curLbl.style.cssText = `position:absolute;left:8px;top:-9px;font-size:10px;font-weight:700;color:#fff;background:#0d1117;padding:0 4px;`;
+  curLbl.textContent = `PRICE $${current_price.toFixed(2)}`;
+  cur.appendChild(curLbl);
+  bar.appendChild(cur);
+
+  // Price range labels
+  const topLbl = document.createElement('div');
+  topLbl.style.cssText = 'position:absolute;left:8px;top:4px;font-size:10px;color:#484f58;';
+  topLbl.textContent = '$' + maxP.toFixed(2);
+  const botLbl = document.createElement('div');
+  botLbl.style.cssText = 'position:absolute;left:8px;bottom:4px;font-size:10px;color:#484f58;';
+  botLbl.textContent = '$' + minP.toFixed(2);
+  bar.appendChild(topLbl);
+  bar.appendChild(botLbl);
+}
+
+$('calcPivotBtn').addEventListener('click', calcPivots);
+$('drawPivotBtn').addEventListener('click', drawPivots);
+$('pivotTicker').addEventListener('keydown', e => { if(e.key==='Enter') calcPivots(); });
+
+// ── Keywords tab
+let kwData = [];
+async function loadKeywords() {
+  const res  = await fetch('/api/keywords');
+  const data = await res.json();
+  kwData     = data.keywords || [];
+  $('kwStats').textContent = `${data.total} keywords · ${data.bullish} bullish · ${data.bearish} bearish · ${data.neutral} neutral`;
+  // Populate category filter
+  const cats = [...new Set(kwData.map(k=>k.category))].sort();
+  $('kwCatFilter').innerHTML = '<option value="">All categories</option>' + cats.map(c=>`<option value="${c}">${c}</option>`).join('');
+  renderKeywords();
+}
+
+function renderKeywords() {
+  const search  = ($('kwSearch').value||'').toLowerCase();
+  const catF    = $('kwCatFilter').value;
+  const sentF   = $('kwSentFilter').value;
+  let data = kwData;
+  if (search) data = data.filter(k => k.phrase.includes(search) || (k.notes||'').toLowerCase().includes(search));
+  if (catF)   data = data.filter(k => k.category === catF);
+  if (sentF)  data = data.filter(k => k.sentiment === sentF);
+  data = [...data].sort((a,b) => (b.base_score - a.base_score));
+
+  const sentColor = { bullish:'#3fb950', bearish:'#f85149', neutral:'#8b949e' };
+  const sentBg    = { bullish:'rgba(63,185,80,.12)', bearish:'rgba(248,81,73,.12)', neutral:'rgba(139,148,158,.1)' };
+
+  $('kwBody').innerHTML = data.map(k => `
+  <tr>
+    <td style="font-weight:600;color:#e6edf3;font-family:monospace">${esc(k.phrase)}</td>
+    <td><span style="background:#21262d;padding:1px 6px;border-radius:3px;font-size:10px;color:#8b949e">${esc(k.category)}</span></td>
+    <td><span style="background:${sentBg[k.sentiment]};color:${sentColor[k.sentiment]};padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700">${k.sentiment}</span></td>
+    <td class="num" style="font-weight:700">${k.base_score}</td>
+    <td class="num">${k.occurrences||0}</td>
+    <td class="num" style="font-weight:700;color:${k.hit_rate>=.7?'#3fb950':k.hit_rate>=.4?'#d29922':'#8b949e'}">${k.hit_rate!=null?(k.hit_rate*100).toFixed(0)+'%':'—'}</td>
+    <td class="num ${k.avg_move?'pos':''}">${k.avg_move?'+'+k.avg_move.toFixed(1)+'%':'—'}</td>
+    <td style="color:#8b949e;font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(k.notes||'')}</td>
+    <td><button class="icon-btn" style="padding:3px 8px;font-size:11px;color:#f85149" onclick="deleteKeyword('${esc(k.phrase)}')">✕</button></td>
+  </tr>`).join('') || '<tr class="empty-row"><td colspan="9">No keywords match filter.</td></tr>';
+}
+
+async function deleteKeyword(phrase) {
+  if (!confirm(`Remove keyword: "${phrase}"?`)) return;
+  await fetch('/api/keywords', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'remove', phrase }) });
+  await loadKeywords();
+}
+
+$('kwSearch').addEventListener('input', renderKeywords);
+$('kwCatFilter').addEventListener('change', renderKeywords);
+$('kwSentFilter').addEventListener('change', renderKeywords);
+
+$('addKwBtn').addEventListener('click', () => {
+  $('addKwForm').style.display = $('addKwForm').style.display==='none' ? 'flex' : 'none';
+});
+$('cancelKwBtn').addEventListener('click', () => { $('addKwForm').style.display='none'; });
+$('saveKwBtn').addEventListener('click', async () => {
+  const phrase = $('kwPhrase').value.trim().toLowerCase();
+  if (!phrase) return alert('Phrase is required');
+  await fetch('/api/keywords', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'add', phrase, category: $('kwCat').value||'custom', sentiment: $('kwSent').value, base_score: +$('kwScore').value, notes: $('kwNotes').value })
+  });
+  $('addKwForm').style.display='none';
+  $('kwPhrase').value=''; $('kwNotes').value='';
+  await loadKeywords();
+});
+
+// ── Continuations tab
+async function loadContinuations(date) {
+  if (!date) { $('contBody').innerHTML = '<tr class="empty-row"><td colspan="11">Select a date above.</td></tr>'; return; }
+  try {
+    const res  = await fetch('/api/continuations?date=' + date);
+    if (!res.ok) { $('contBody').innerHTML = '<tr class="empty-row"><td colspan="11">No continuation data for this date.</td></tr>'; return; }
+    const rec  = await res.json();
+    const c    = rec.candidates || [];
+    $('contSummary').textContent = `${c.length} candidates · next day: ${rec.next_date} · scored: ${c.filter(x=>x.continued!==null).length}`;
+    if (!c.length) { $('contBody').innerHTML = '<tr class="empty-row"><td colspan="11">No candidates for this date.</td></tr>'; return; }
+    const wins = c.filter(x=>x.continued===true).length;
+    const scored = c.filter(x=>x.continued!==null).length;
+    $('contSummary').textContent += scored ? ` · hit rate: ${Math.round(wins/scored*100)}%` : '';
+
+    $('contBody').innerHTML = c.map(s => `
+    <tr>
+      <td><span class="ticker">${esc(s.ticker)}</span><div class="co-name">${esc(s.name||'')}</div></td>
+      <td><span class="float-badge ${floatClass(s.float_shares)}">${fmtShares(s.float_shares)}</span></td>
+      <td>${(s.catalysts||[]).map(c=>`<span style="background:rgba(248,81,73,.15);color:#f85149;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:700;margin-right:3px">${c.toUpperCase()}</span>`).join('')||'<span style="color:#484f58">—</span>'}</td>
+      <td class="num ${cls(s.pm_change)}">${fmtPct(s.pm_change)}</td>
+      <td class="num ${s.pm_rvol>=5?'rvol-high':''}">${s.pm_rvol?s.pm_rvol.toFixed(1)+'×':'—'}</td>
+      <td class="num">$${fmt(s.pm_price)}</td>
+      <td class="num">${s.next_open?'$'+fmt(s.next_open):'⏳'}</td>
+      <td class="num ${s.next_chg!=null?cls(s.next_chg):'neu'}">${s.next_chg!=null?fmtPct(s.next_chg):'⏳'}</td>
+      <td class="num">${s.next_rvol?s.next_rvol.toFixed(1)+'×':'⏳'}</td>
+      <td>${s.continued===true?'<span style="color:#3fb950;font-weight:700">✅ Yes</span>':s.continued===false?'<span style="color:#f85149">❌ No</span>':'<span style="color:#484f58">⏳ Pending</span>'}</td>
+      <td class="num" style="font-weight:700;color:${s.continuation_score>=70?'#3fb950':s.continuation_score>=40?'#d29922':'#8b949e'}">${s.continuation_score??'—'}</td>
+    </tr>`).join('');
+  } catch(e) {
+    $('contBody').innerHTML = `<tr class="empty-row"><td colspan="11">Error: ${e.message}</td></tr>`;
+  }
+}
+
+$('contDateSelect').addEventListener('change', e => loadContinuations(e.target.value));
+
+// ── Tab switching (updated to include continuations)
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const name = tab.dataset.tab;
+    $('tabScanner').style.display      = name==='scanner'       ? '' : 'none';
+    $('tabContinuations').style.display= name==='continuations' ? '' : 'none';
+    $('tabPivots').style.display       = name==='pivots'        ? '' : 'none';
+    $('tabKeywords').style.display     = name==='keywords'      ? '' : 'none';
+    $('tabHistory').style.display      = name==='history'       ? '' : 'none';
+    if (name==='history')       loadHistory();
+    if (name==='keywords')      loadKeywords();
+    if (name==='continuations') {
+      // populate date selector from available dates
+      const opts = Array.from($('dateSelect').options).slice(1).map(o=>`<option value="${o.value}">${o.value}</option>`).join('');
+      $('contDateSelect').innerHTML = '<option value="">— Select date —</option>' + opts;
+    }
+  });
+});
+
+// ── Init
+(async () => {
+  await loadDates();
+  await loadScan();
+})();
+</script>
+</body>
+</html>

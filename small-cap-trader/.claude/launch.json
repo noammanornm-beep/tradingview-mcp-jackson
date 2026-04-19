@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "small-cap-trader",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\Users\\Noam\\tradingview-mcp-jackson\\small-cap-trader\\server.js"],
+      "port": 3838,
+      "autoPort": true
+    }
+  ]
+}
