@@ -97,6 +97,13 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 7. **Call `chart_get_state` once** at the start to get entity IDs, then reference them — don't re-call repeatedly
 8. **Cap your OHLCV requests** — `count: 20` for quick analysis, `count: 100` for deeper work, `count: 500` only when specifically needed
 
+### Screenshot Rules — CRITICAL
+**Never take screenshots in a loop or bulk scan.** The Anthropic API enforces a 2000px image dimension limit when multiple images are in the conversation. Accumulating screenshots across iterations will crash the session.
+
+- **Single symbol analysis**: 1 screenshot max per session — only if user explicitly asks for visual confirmation
+- **Bulk scans (small cap scanner, morning brief, batch_run)**: NO screenshots — use text data only (`quote_get`, `data_get_study_values`, `data_get_ohlcv` with `summary: true`)
+- **Never `Read` a screenshot PNG file** during a loop — this adds the image to conversation context each iteration
+
 ### Output Size Estimates (compact mode)
 | Tool | Typical Output |
 |------|---------------|
