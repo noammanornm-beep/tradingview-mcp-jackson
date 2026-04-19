@@ -32,11 +32,17 @@ export async function captureScreenshot({ region, filename, method } = {}) {
   const client = await getClient();
   let clip = undefined;
 
-  // Get viewport size to compute scale — keeps screenshots under Anthropic's 2000px limit
-  const MAX_DIM = 1900;
+  // Keep screenshots under Anthropic's 2000px many-image limit.
+  // CDP outputs width * scale * devicePixelRatio pixels, so we must factor in DPR.
+  const MAX_DIM = 1800;
   const layout = await client.Page.getLayoutMetrics().catch(() => null);
   const vpW = layout?.cssLayoutViewport?.clientWidth || layout?.layoutViewport?.clientWidth || 1920;
   const vpH = layout?.cssLayoutViewport?.clientHeight || layout?.layoutViewport?.clientHeight || 1080;
+  const dpr = await evaluate('window.devicePixelRatio || 1').catch(() => 1);
+
+  function safeScale(w, h) {
+    return Math.min(1, MAX_DIM / (Math.max(w, h) * dpr));
+  }
 
   if (region === 'chart') {
     const bounds = await evaluate(`
@@ -50,8 +56,7 @@ export async function captureScreenshot({ region, filename, method } = {}) {
       })()
     `);
     if (bounds) {
-      const scale = Math.min(1, MAX_DIM / Math.max(bounds.width, bounds.height));
-      clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale };
+      clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: safeScale(bounds.width, bounds.height) };
     }
   } else if (region === 'strategy_tester') {
     const bounds = await evaluate(`
@@ -64,13 +69,11 @@ export async function captureScreenshot({ region, filename, method } = {}) {
       })()
     `);
     if (bounds) {
-      const scale = Math.min(1, MAX_DIM / Math.max(bounds.width, bounds.height));
-      clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale };
+      clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: safeScale(bounds.width, bounds.height) };
     }
   } else {
-    // Full screenshot — scale down if viewport exceeds limit
-    const scale = Math.min(1, MAX_DIM / Math.max(vpW, vpH));
-    if (scale < 1) clip = { x: 0, y: 0, width: vpW, height: vpH, scale };
+    // Full screenshot — always set clip so scale is enforced
+    clip = { x: 0, y: 0, width: vpW, height: vpH, scale: safeScale(vpW, vpH) };
   }
 
   const params = { format: 'png' };
