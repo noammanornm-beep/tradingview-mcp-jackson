@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "industry-dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["industry-dashboard/server.js"],
+      "port": 3737
+    },
+    {
+      "name": "tradingview-mcp",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/server.js"],
+      "port": null
+    }
+  ]
+}

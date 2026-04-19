@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Industry Performance Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  #appHeader {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .logo { font-size: 15px; font-weight: 700; color: #58a6ff; }
+  .logo span { color: #8b949e; font-weight: 400; font-size: 12px; margin-left: 8px; }
+
+  .controls { display: flex; align-items: center; gap: 10px; }
+
+  .timeframe-group {
+    display: flex;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .tf-btn {
+    padding: 5px 14px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid #30363d;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.12s;
+  }
+  .tf-btn:last-child { border-right: none; }
+  .tf-btn:hover { background: #30363d; color: #e6edf3; }
+  .tf-btn.active { background: #1f6feb; color: #fff; }
+
+  .search-box {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 5px 11px;
+    color: #e6edf3;
+    font-size: 12px;
+    width: 190px;
+    outline: none;
+  }
+  .search-box:focus { border-color: #58a6ff; }
+  .search-box::placeholder { color: #484f58; }
+
+  .icon-btn {
+    padding: 5px 12px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.12s;
+  }
+  .icon-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+
+  /* ── Status bar ── */
+  #appStatus {
+    padding: 6px 24px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #3fb950; flex-shrink: 0; }
+  .dot.spin { background: #d29922; animation: blink 1s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── Main table ── */
+  .table-wrap { padding: 0 24px 24px; overflow-x: auto; }
+
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+
+  thead th {
+    background: #161b22;
+    padding: 9px 12px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #8b949e;
+    border-bottom: 2px solid #30363d;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  thead th:hover { color: #e6edf3; }
+  thead th.sorted { color: #58a6ff; }
+  .sort-arrow { margin-left: 3px; opacity: 0.5; }
+  thead th.sorted .sort-arrow { opacity: 1; }
+
+  col.c-rank  { width: 42px; }
+  col.c-name  { width: 260px; }
+  col.c-sect  { width: 155px; }
+  col.c-cnt   { width: 65px; }
+  col.c-perf  { width: 95px; }
+
+  tbody tr { border-bottom: 1px solid #21262d; transition: background 0.1s; }
+  tbody tr:hover { background: #161b22; }
+  td { padding: 8px 12px; vertical-align: middle; }
+
+  .rank { color: #484f58; font-size: 12px; text-align: center; }
+
+  .ind-link {
+    font-weight: 500;
+    color: #58a6ff;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .ind-link:hover { text-decoration: underline; }
+  .sub-label {
+    display: inline-block;
+    margin-top: 2px;
+    font-size: 10px;
+    color: #8b949e;
+    background: #21262d;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .sect-text { color: #8b949e; font-size: 12px; }
+  .cnt-text  { color: #8b949e; font-size: 11px; text-align: right; }
+
+  .perf-td { text-align: right; }
+  .perf-td.active-col { background: rgba(31,111,235,0.06); }
+  .perf-val {
+    font-weight: 600;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pos { color: #3fb950; }
+  .neg { color: #f85149; }
+  .zer { color: #8b949e; }
+  .bar-row { display: flex; justify-content: flex-end; margin-top: 3px; }
+  .bar { height: 3px; border-radius: 2px; }
+  .bar.pos { background: #3fb950; }
+  .bar.neg { background: #f85149; }
+
+  .empty-row td { text-align: center; padding: 50px; color: #484f58; }
+
+  /* ── Loading overlay ── */
+  #loadingOverlay {
+    position: fixed; inset: 0;
+    background: rgba(13,17,23,.88);
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; z-index: 900;
+  }
+  .spinner {
+    width: 34px; height: 34px;
+    border: 3px solid #30363d;
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Drill-down panel ── */
+  #drillOverlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(13,17,23,.7);
+    z-index: 800;
+  }
+  #drillPanel {
+    display: none;
+    position: fixed;
+    top: 0; right: 0;
+    width: min(800px, 100vw);
+    height: 100vh;
+    background: #0d1117;
+    border-left: 1px solid #30363d;
+    flex-direction: column;
+    z-index: 801;
+    box-shadow: -8px 0 32px rgba(0,0,0,.5);
+    overflow: hidden;
+  }
+  #drillPanel.open, #drillOverlay.open { display: flex; }
+
+  .drill-header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 14px 20px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .drill-title { font-size: 15px; font-weight: 700; color: #e6edf3; }
+  .drill-sub { font-size: 11px; color: #8b949e; margin-top: 3px; }
+  .drill-close {
+    background: none; border: none; color: #8b949e;
+    cursor: pointer; font-size: 20px; line-height: 1;
+    padding: 0 4px;
+    transition: color .12s;
+  }
+  .drill-close:hover { color: #f85149; }
+
+  .drill-controls {
+    padding: 10px 20px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .drill-body { flex: 1; overflow-y: auto; padding: 0 20px 20px; }
+
+  .drill-body table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .drill-body thead th {
+    background: #161b22;
+    padding: 8px 10px;
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .7px;
+    color: #8b949e;
+    border-bottom: 2px solid #30363d;
+    cursor: pointer; user-select: none;
+    position: sticky; top: 0; z-index: 2;
+    white-space: nowrap;
+  }
+  .drill-body thead th:hover { color: #e6edf3; }
+  .drill-body thead th.sorted { color: #58a6ff; }
+  .drill-body tbody tr { border-bottom: 1px solid #21262d; transition: background .1s; }
+  .drill-body tbody tr:hover { background: #161b22; }
+  .drill-body td { padding: 7px 10px; vertical-align: middle; }
+
+  col.dc-rank { width: 38px; }
+  col.dc-tick { width: 80px; }
+  col.dc-name { width: auto; }
+  col.dc-mcap { width: 90px; }
+  col.dc-perf { width: 88px; }
+
+  .ticker-badge {
+    font-weight: 700; font-size: 12px;
+    color: #58a6ff; font-family: monospace;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .ticker-badge:hover {
+    text-decoration: underline;
+    color: #79b8ff;
+  }
+  .tv-opening {
+    position: fixed;
+    bottom: 20px; right: 24px;
+    background: #1f6feb;
+    color: #fff;
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: 6px;
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  }
+  .tv-opening.show { display: flex; }
+  .stock-name { font-size: 12px; color: #e6edf3; }
+  .mcap-val { font-size: 11px; color: #8b949e; text-align: right; }
+
+  .drill-spinner {
+    display: flex; align-items: center; justify-content: center;
+    padding: 60px; color: #484f58; gap: 12px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="appHeader">
+  <div class="logo">Industry Performance <span>TradingView · US Markets</span></div>
+  <div class="controls">
+    <input class="search-box" id="searchInput" type="text" placeholder="Search industry or sector…">
+    <div class="timeframe-group" id="tfGroup">
+      <button class="tf-btn active" data-tf="perf1d">1D</button>
+      <button class="tf-btn" data-tf="perf1w">1W</button>
+      <button class="tf-btn" data-tf="perf1m">1M</button>
+      <button class="tf-btn" data-tf="perf3m">3M</button>
+    </div>
+    <button class="icon-btn" id="refreshBtn">↻ Refresh</button>
+    <button class="icon-btn" id="settingsBtn">⚙ Filters</button>
+  </div>
+</div>
+
+<!-- Filter bar (hidden by default) -->
+<div id="filterBar" style="display:none; background:#161b22; border-bottom:1px solid #30363d; padding:10px 24px; display:none; align-items:center; gap:20px; flex-wrap:wrap;">
+  <div style="display:flex; align-items:center; gap:8px;">
+    <label style="font-size:11px; color:#8b949e; white-space:nowrap;">Min Market Cap</label>
+    <select id="minMcapSelect" class="search-box" style="width:130px; padding:4px 8px;">
+      <option value="0">No minimum</option>
+      <option value="50000000">$50M+</option>
+      <option value="100000000">$100M+</option>
+      <option value="300000000">$300M+</option>
+      <option value="500000000">$500M+</option>
+      <option value="1000000000">$1B+</option>
+      <option value="2000000000">$2B+</option>
+      <option value="10000000000">$10B+</option>
+    </select>
+  </div>
+  <div style="display:flex; align-items:center; gap:8px;">
+    <label style="font-size:11px; color:#8b949e; white-space:nowrap;">Min Stock Price</label>
+    <select id="minPriceSelect" class="search-box" style="width:120px; padding:4px 8px;">
+      <option value="0">No minimum</option>
+      <option value="1">$1+</option>
+      <option value="2">$2+</option>
+      <option value="5">$5+</option>
+      <option value="10">$10+</option>
+      <option value="20">$20+</option>
+      <option value="50">$50+</option>
+    </select>
+  </div>
+  <button class="icon-btn" id="applyFiltersBtn" style="background:#1f6feb; border-color:#1f6feb; color:#fff;">Apply</button>
+  <span id="filterBadge" style="font-size:11px; color:#8b949e;"></span>
+</div>
+
+<!-- Status bar -->
+<div id="appStatus">
+  <span class="dot" id="statusDot"></span>
+  <span id="statusText">Loading…</span>
+  <span id="lastUpdated" style="color:#484f58"></span>
+</div>
+
+<!-- Main table -->
+<div class="table-wrap">
+  <table>
+    <colgroup>
+      <col class="c-rank"><col class="c-name"><col class="c-sect">
+      <col class="c-cnt"><col class="c-perf"><col class="c-perf">
+      <col class="c-perf"><col class="c-perf">
+    </colgroup>
+    <thead id="mainHead">
+      <tr>
+        <th style="cursor:default">#</th>
+        <th style="cursor:default">Industry</th>
+        <th style="cursor:default">Sector</th>
+        <th class="cnt-text" style="cursor:default">Stocks</th>
+        <th data-col="perf1d" class="perf-td sorted">1D <span class="sort-arrow">▼</span></th>
+        <th data-col="perf1w" class="perf-td">1W <span class="sort-arrow">▼</span></th>
+        <th data-col="perf1m" class="perf-td">1M <span class="sort-arrow">▼</span></th>
+        <th data-col="perf3m" class="perf-td">3M <span class="sort-arrow">▼</span></th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">
+      <tr class="empty-row"><td colspan="8">Loading industry data…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div style="color:#8b949e;font-size:12px">Fetching industry data from TradingView…</div>
+</div>
+
+<!-- TV open toast -->
+<div class="tv-opening" id="tvToast">
+  <div class="spinner" style="width:14px;height:14px;border-width:2px"></div>
+  <span id="tvToastMsg">Opening in TradingView…</span>
+</div>
+
+<!-- Drill-down overlay + panel -->
+<div id="drillOverlay"></div>
+<div id="drillPanel">
+  <div class="drill-header">
+    <div>
+      <div class="drill-title" id="drillTitle">—</div>
+      <div class="drill-sub" id="drillSub"></div>
+    </div>
+    <button class="drill-close" id="drillClose">✕</button>
+  </div>
+  <div class="drill-controls">
+    <input class="search-box" id="drillSearch" type="text" placeholder="Search ticker or name…" style="width:160px">
+    <div class="timeframe-group" id="drillTfGroup">
+      <button class="tf-btn active" data-tf="perf1d">1D</button>
+      <button class="tf-btn" data-tf="perf1w">1W</button>
+      <button class="tf-btn" data-tf="perf1m">1M</button>
+      <button class="tf-btn" data-tf="perf3m">3M</button>
+    </div>
+  </div>
+  <div class="drill-body">
+    <table>
+      <colgroup>
+        <col class="dc-rank"><col class="dc-tick"><col class="dc-name">
+        <col class="dc-mcap"><col class="dc-perf"><col class="dc-perf">
+        <col class="dc-perf"><col class="dc-perf">
+      </colgroup>
+      <thead id="drillHead">
+        <tr>
+          <th style="cursor:default">#</th>
+          <th style="cursor:default">Ticker</th>
+          <th style="cursor:default">Name</th>
+          <th class="mcap-val" style="cursor:default">Mkt Cap</th>
+          <th data-col="perf1d" class="perf-td sorted">1D <span class="sort-arrow">▼</span></th>
+          <th data-col="perf1w" class="perf-td">1W <span class="sort-arrow">▼</span></th>
+          <th data-col="perf1m" class="perf-td">1M <span class="sort-arrow">▼</span></th>
+          <th data-col="perf3m" class="perf-td">3M <span class="sort-arrow">▼</span></th>
+        </tr>
+      </thead>
+      <tbody id="drillBody">
+        <tr class="empty-row"><td colspan="8">Select an industry to drill down.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allData      = [];
+let mainSort     = 'perf1d';
+let mainDir      = -1;
+let mainFilter   = '';
+
+let filterMinMcap  = 0;
+let filterMinPrice = 0;
+
+let drillData    = [];
+let drillSort    = 'perf1d';
+let drillDir     = -1;
+let drillFilter  = '';
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function fmt(v) {
+  if (v == null) return '—';
+  return (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+function cls(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'zer'; }
+function barW(v, max) { return max ? Math.min(44, Math.abs(v||0) / max * 44) : 0; }
+
+function fmtMcap(v) {
+  if (!v) return '—';
+  if (v >= 1e12) return '$' + (v/1e12).toFixed(2) + 'T';
+  if (v >= 1e9)  return '$' + (v/1e9).toFixed(1) + 'B';
+  if (v >= 1e6)  return '$' + (v/1e6).toFixed(0) + 'M';
+  if (v >= 1e3)  return '$' + (v/1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
+}
+
+function perfCells(d, activeCol, maxVals) {
+  return ['perf1d','perf1w','perf1m','perf3m'].map(f => {
+    const v = d[f]; const c = cls(v);
+    const bw = barW(v, maxVals[f]);
+    const ac = f === activeCol ? ' active-col' : '';
+    return `<td class="perf-td${ac}">
+      <div class="perf-val ${c}">${fmt(v)}</div>
+      <div class="bar-row"><div class="bar ${c}" style="width:${bw}px"></div></div>
+    </td>`;
+  }).join('');
+}
+
+function maxValsOf(arr) {
+  return {
+    perf1d: Math.max(0,...arr.map(d=>Math.abs(d.perf1d||0))),
+    perf1w: Math.max(0,...arr.map(d=>Math.abs(d.perf1w||0))),
+    perf1m: Math.max(0,...arr.map(d=>Math.abs(d.perf1m||0))),
+    perf3m: Math.max(0,...arr.map(d=>Math.abs(d.perf3m||0))),
+  };
+}
+
+function sortArr(arr, col, dir) {
+  return [...arr].sort((a,b) => dir * ((b[col]||0)-(a[col]||0)));
+}
+
+function syncTfBtns(group, col) {
+  group.querySelectorAll('.tf-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tf === col));
+}
+
+function syncHeadSort(thead, col, dir) {
+  thead.querySelectorAll('th[data-col]').forEach(th => {
+    const isActive = th.dataset.col === col;
+    th.classList.toggle('sorted', isActive);
+    const arrow = th.querySelector('.sort-arrow');
+    if (arrow) arrow.textContent = isActive ? (dir === -1 ? '▼' : '▲') : '▼';
+  });
+}
+
+// ── Main table render ─────────────────────────────────────────────────────
+function renderMain() {
+  const tbody = document.getElementById('tableBody');
+  let data = allData;
+  if (mainFilter) {
+    const q = mainFilter.toLowerCase();
+    data = data.filter(d =>
+      d.industry.toLowerCase().includes(q) ||
+      (d.sector||'').toLowerCase().includes(q));
+  }
+  data = sortArr(data, mainSort, mainDir);
+
+  if (!data.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No results.</td></tr>';
+    return;
+  }
+  const mv = maxValsOf(data);
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td class="rank">${i+1}</td>
+    <td>
+      <div class="ind-link" data-industry="${escHtml(d.industry)}">${escHtml(d.industry)}</div>
+      <span class="sub-label">${escHtml(d.sector||'')}</span>
+    </td>
+    <td class="sect-text">${escHtml(d.sector||'—')}</td>
+    <td class="cnt-text">${d.count}</td>
+    ${perfCells(d, mainSort, mv)}
+  </tr>`).join('');
+
+  // Attach click handlers for drill-down
+  tbody.querySelectorAll('.ind-link').forEach(el => {
+    el.addEventListener('click', () => openDrill(el.dataset.industry));
+  });
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Fetch main data ───────────────────────────────────────────────────────
+function filterQueryStr() {
+  const p = new URLSearchParams();
+  if (filterMinMcap  > 0) p.set('minMcap',  filterMinMcap);
+  if (filterMinPrice > 0) p.set('minPrice', filterMinPrice);
+  return p.toString() ? '?' + p.toString() : '';
+}
+
+function updateFilterBadge() {
+  const parts = [];
+  if (filterMinMcap  > 0) parts.push('MCap ≥ ' + fmtMcap(filterMinMcap));
+  if (filterMinPrice > 0) parts.push('Price ≥ $' + filterMinPrice);
+  document.getElementById('filterBadge').textContent = parts.length ? 'Active: ' + parts.join(' · ') : '';
+  // Update settings button to show active state
+  document.getElementById('settingsBtn').style.borderColor = parts.length ? '#58a6ff' : '';
+  document.getElementById('settingsBtn').style.color       = parts.length ? '#58a6ff' : '';
+}
+
+async function fetchMain() {
+  const dot = document.getElementById('statusDot');
+  dot.classList.add('spin');
+  document.getElementById('statusText').textContent = 'Fetching…';
+  document.getElementById('loadingOverlay').style.display = 'flex';
+  try {
+    const res = await fetch('/api/industries' + filterQueryStr());
+    allData = await res.json();
+    if (allData.error) throw new Error(allData.error);
+    dot.classList.remove('spin');
+    document.getElementById('statusText').textContent = `${allData.length} industries`;
+    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    renderMain();
+  } catch(e) {
+    dot.classList.remove('spin');
+    dot.style.background = '#f85149';
+    document.getElementById('statusText').textContent = 'Error: ' + e.message;
+  } finally {
+    document.getElementById('loadingOverlay').style.display = 'none';
+  }
+}
+
+// ── Drill-down ────────────────────────────────────────────────────────────
+async function openDrill(industry) {
+  document.getElementById('drillTitle').textContent = industry;
+  document.getElementById('drillSub').textContent = 'Loading stocks…';
+  document.getElementById('drillBody').innerHTML =
+    '<tr><td colspan="8"><div class="drill-spinner"><div class="spinner"></div> Loading…</div></td></tr>';
+  document.getElementById('drillPanel').classList.add('open');
+  document.getElementById('drillOverlay').classList.add('open');
+
+  drillSort = 'perf1d';
+  drillDir = -1;
+  drillFilter = '';
+  document.getElementById('drillSearch').value = '';
+  syncTfBtns(document.getElementById('drillTfGroup'), drillSort);
+  syncHeadSort(document.getElementById('drillHead'), drillSort, drillDir);
+
+  try {
+    const p = new URLSearchParams({ industry });
+    if (filterMinMcap  > 0) p.set('minMcap',  filterMinMcap);
+    if (filterMinPrice > 0) p.set('minPrice', filterMinPrice);
+    const res = await fetch('/api/stocks?' + p.toString());
+    drillData = await res.json();
+    if (drillData.error) throw new Error(drillData.error);
+    document.getElementById('drillSub').textContent =
+      `${drillData.length} stocks · sorted by active timeframe`;
+    renderDrill();
+  } catch(e) {
+    document.getElementById('drillBody').innerHTML =
+      `<tr class="empty-row"><td colspan="8">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function closeDrill() {
+  document.getElementById('drillPanel').classList.remove('open');
+  document.getElementById('drillOverlay').classList.remove('open');
+}
+
+function renderDrill() {
+  const tbody = document.getElementById('drillBody');
+  let data = drillData;
+  if (drillFilter) {
+    const q = drillFilter.toLowerCase();
+    data = data.filter(d =>
+      (d.ticker||'').toLowerCase().includes(q) ||
+      (d.name||'').toLowerCase().includes(q));
+  }
+  data = sortArr(data, drillSort, drillDir);
+  if (!data.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No results.</td></tr>';
+    return;
+  }
+  const mv = maxValsOf(data);
+  tbody.innerHTML = data.map((d, i) => `<tr>
+    <td class="rank">${i+1}</td>
+    <td><span class="ticker-badge" data-ticker="${escHtml(d.ticker||'')}" title="Open in TradingView">${escHtml(d.ticker||'')}</span></td>
+    <td class="stock-name">${escHtml(d.name||'')}</td>
+    <td class="mcap-val">${fmtMcap(d.mcap)}</td>
+    ${perfCells(d, drillSort, mv)}
+  </tr>`).join('');
+
+  // Attach ticker click handlers
+  tbody.querySelectorAll('.ticker-badge[data-ticker]').forEach(el => {
+    el.addEventListener('click', () => openInTV(el.dataset.ticker));
+  });
+}
+
+// ── Wire up controls ──────────────────────────────────────────────────────
+
+// Main timeframe buttons
+document.getElementById('tfGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.tf-btn');
+  if (!btn) return;
+  mainSort = btn.dataset.tf;
+  mainDir = -1;
+  syncTfBtns(document.getElementById('tfGroup'), mainSort);
+  syncHeadSort(document.getElementById('mainHead'), mainSort, mainDir);
+  renderMain();
+});
+
+// Main column headers
+document.getElementById('mainHead').addEventListener('click', e => {
+  const th = e.target.closest('th[data-col]');
+  if (!th) return;
+  const col = th.dataset.col;
+  if (mainSort === col) mainDir *= -1;
+  else { mainSort = col; mainDir = -1; }
+  syncTfBtns(document.getElementById('tfGroup'), mainSort);
+  syncHeadSort(document.getElementById('mainHead'), mainSort, mainDir);
+  renderMain();
+});
+
+// Main search
+document.getElementById('searchInput').addEventListener('input', e => {
+  mainFilter = e.target.value;
+  renderMain();
+});
+
+// Refresh
+document.getElementById('refreshBtn').addEventListener('click', fetchMain);
+
+// Settings / filter bar toggle
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  const bar = document.getElementById('filterBar');
+  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+});
+
+// Apply filters
+document.getElementById('applyFiltersBtn').addEventListener('click', () => {
+  filterMinMcap  = parseFloat(document.getElementById('minMcapSelect').value)  || 0;
+  filterMinPrice = parseFloat(document.getElementById('minPriceSelect').value) || 0;
+  updateFilterBadge();
+  fetchMain();
+});
+
+// Drill timeframe buttons
+document.getElementById('drillTfGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.tf-btn');
+  if (!btn) return;
+  drillSort = btn.dataset.tf;
+  drillDir = -1;
+  syncTfBtns(document.getElementById('drillTfGroup'), drillSort);
+  syncHeadSort(document.getElementById('drillHead'), drillSort, drillDir);
+  renderDrill();
+});
+
+// Drill column headers
+document.getElementById('drillHead').addEventListener('click', e => {
+  const th = e.target.closest('th[data-col]');
+  if (!th) return;
+  const col = th.dataset.col;
+  if (drillSort === col) drillDir *= -1;
+  else { drillSort = col; drillDir = -1; }
+  syncTfBtns(document.getElementById('drillTfGroup'), drillSort);
+  syncHeadSort(document.getElementById('drillHead'), drillSort, drillDir);
+  renderDrill();
+});
+
+// Drill search
+document.getElementById('drillSearch').addEventListener('input', e => {
+  drillFilter = e.target.value;
+  renderDrill();
+});
+
+// Close drill panel
+document.getElementById('drillClose').addEventListener('click', closeDrill);
+document.getElementById('drillOverlay').addEventListener('click', closeDrill);
+
+// ── Open in TradingView ───────────────────────────────────────────────────
+async function openInTV(ticker) {
+  const toast = document.getElementById('tvToast');
+  const msg   = document.getElementById('tvToastMsg');
+  msg.textContent = `Opening ${ticker} in TradingView…`;
+  toast.classList.add('show');
+  try {
+    const res  = await fetch('/api/open?ticker=' + encodeURIComponent(ticker));
+    const json = await res.json();
+    if (json.error) throw new Error(json.error);
+    msg.textContent = `✓ ${ticker} opened`;
+  } catch (e) {
+    msg.textContent = `✗ ${e.message}`;
+  }
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+fetchMain();
+</script>
+</body>
+</html>
