@@ -32,6 +32,12 @@ export async function captureScreenshot({ region, filename, method } = {}) {
   const client = await getClient();
   let clip = undefined;
 
+  // Get viewport size to compute scale — keeps screenshots under Anthropic's 2000px limit
+  const MAX_DIM = 1900;
+  const layout = await client.Page.getLayoutMetrics().catch(() => null);
+  const vpW = layout?.cssLayoutViewport?.clientWidth || layout?.layoutViewport?.clientWidth || 1920;
+  const vpH = layout?.cssLayoutViewport?.clientHeight || layout?.layoutViewport?.clientHeight || 1080;
+
   if (region === 'chart') {
     const bounds = await evaluate(`
       (function() {
@@ -43,7 +49,10 @@ export async function captureScreenshot({ region, filename, method } = {}) {
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })()
     `);
-    if (bounds) clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 1 };
+    if (bounds) {
+      const scale = Math.min(1, MAX_DIM / Math.max(bounds.width, bounds.height));
+      clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale };
+    }
   } else if (region === 'strategy_tester') {
     const bounds = await evaluate(`
       (function() {
@@ -54,7 +63,14 @@ export async function captureScreenshot({ region, filename, method } = {}) {
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       })()
     `);
-    if (bounds) clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale: 1 };
+    if (bounds) {
+      const scale = Math.min(1, MAX_DIM / Math.max(bounds.width, bounds.height));
+      clip = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, scale };
+    }
+  } else {
+    // Full screenshot — scale down if viewport exceeds limit
+    const scale = Math.min(1, MAX_DIM / Math.max(vpW, vpH));
+    if (scale < 1) clip = { x: 0, y: 0, width: vpW, height: vpH, scale };
   }
 
   const params = { format: 'png' };
