@@ -89,19 +89,25 @@ export function listDates() {
     .map(date => ({ date, sessions: {} }));
 }
 
-/** Get stats across all saved data for a ticker */
+/** Get stats across all saved data for a ticker (includes historical backfill) */
 export function getTickerHistory(ticker) {
-  const dates = listDates();
+  const dates   = listDates();
   const history = [];
+  const seen    = new Set(); // deduplicate by date+session
+
   for (const { date } of dates) {
-    for (const session of ['premarket', 'open', 'eod']) {
+    for (const session of ['historical', 'premarket', 'open', 'eod', 'postmarket']) {
       const scan = loadScan(date, session);
       if (!scan) continue;
       const stock = scan.stocks.find(s => s.ticker === ticker);
-      if (stock) history.push(stock);
+      if (stock) {
+        const key = `${date}_${session}`;
+        if (!seen.has(key)) { seen.add(key); history.push(stock); }
+      }
     }
   }
-  return history;
+  // Sort chronologically
+  return history.sort((a, b) => a.scanned_at.localeCompare(b.scanned_at));
 }
 
 /** Get all tickers that have appeared across all scans */

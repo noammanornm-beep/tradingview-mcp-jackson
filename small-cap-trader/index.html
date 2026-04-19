@@ -108,6 +108,7 @@
       <button class="sess-btn" data-s="postmarket">PM</button>
     </div>
     <button class="icon-btn scan-btn" id="scanBtn">▶ Scan Now</button>
+    <button class="icon-btn" id="backfillBtn" style="border-color:#8957e5;color:#8957e5;">📥 Backfill History</button>
   </div>
 </div>
 
@@ -289,6 +290,45 @@
 </div>
 
 <div id="toast"><span id="toastMsg"></span></div>
+
+<!-- Backfill Modal -->
+<div id="backfillModal" style="display:none;position:fixed;inset:0;background:rgba(13,17,23,.9);z-index:950;align-items:center;justify-content:center;">
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:24px;width:480px;max-width:95vw;">
+    <div style="font-size:15px;font-weight:700;color:#e6edf3;margin-bottom:6px;">📥 Backfill Historical Data</div>
+    <div style="font-size:12px;color:#8b949e;margin-bottom:16px;">Fetches daily OHLCV from Yahoo Finance for each ticker so pivot levels are immediately usable.</div>
+
+    <div style="display:flex;gap:12px;margin-bottom:14px;align-items:flex-end;">
+      <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:4px">TICKERS</label>
+        <textarea id="bfTickers" style="background:#21262d;border:1px solid #30363d;border-radius:6px;padding:8px;color:#e6edf3;font-size:11px;width:260px;height:70px;resize:vertical;font-family:monospace" placeholder="EFOI FRMM MYSE&#10;(one per line or space-separated)&#10;Leave blank = use current scan"></textarea>
+      </div>
+      <div>
+        <div><label style="font-size:10px;color:#8b949e;display:block;margin-bottom:4px">LOOKBACK</label>
+        <select class="date-select" id="bfDays">
+          <option value="30">30 days</option>
+          <option value="90">90 days</option>
+          <option value="180" selected>180 days (6 months)</option>
+          <option value="365">365 days (1 year)</option>
+        </select></div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="bfProgress" style="display:none;margin-bottom:14px;">
+      <div style="font-size:11px;color:#8b949e;margin-bottom:6px" id="bfProgressText">Starting…</div>
+      <div style="background:#21262d;border-radius:4px;height:6px;overflow:hidden;">
+        <div id="bfProgressBar" style="background:#8957e5;height:100%;width:0%;transition:width .2s;border-radius:4px;"></div>
+      </div>
+      <div id="bfLog" style="margin-top:8px;max-height:120px;overflow-y:auto;font-family:monospace;font-size:10px;color:#8b949e;background:#0d1117;border-radius:4px;padding:6px;"></div>
+    </div>
+
+    <div id="bfResult" style="display:none;margin-bottom:14px;font-size:12px;color:#3fb950;"></div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="icon-btn" id="bfCancelBtn">Cancel</button>
+      <button class="icon-btn scan-btn" id="bfStartBtn" style="background:#8957e5;border-color:#8957e5;">Start Backfill</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── State
@@ -545,6 +585,84 @@ document.querySelectorAll('thead th[data-col]').forEach(th => {
 });
 
 $('histSearch').addEventListener('input', e => renderHistory(e.target.value));
+
+// ── Backfill
+$('backfillBtn').addEventListener('click', () => {
+  // Pre-fill tickers from current scan
+  if (scanData.length) $('bfTickers').value = scanData.map(s=>s.ticker).join('\n');
+  $('bfProgress').style.display = 'none';
+  $('bfResult').style.display   = 'none';
+  $('bfStartBtn').disabled      = false;
+  $('bfStartBtn').textContent   = 'Start Backfill';
+  $('backfillModal').style.display = 'flex';
+});
+$('bfCancelBtn').addEventListener('click', () => $('backfillModal').style.display = 'none');
+
+$('bfStartBtn').addEventListener('click', async () => {
+  const raw     = $('bfTickers').value.trim();
+  const tickers = raw ? raw.split(/[\s,\n]+/).map(t=>t.trim().toUpperCase()).filter(Boolean) : scanData.map(s=>s.ticker);
+  const days    = parseInt($('bfDays').value) || 180;
+
+  if (!tickers.length) { toast('No tickers to backfill'); return; }
+
+  $('bfStartBtn').disabled    = true;
+  $('bfStartBtn').textContent = `Backfilling ${tickers.length} tickers…`;
+  $('bfProgress').style.display = '';
+  $('bfResult').style.display   = 'none';
+  $('bfLog').innerHTML          = '';
+
+  let done = 0, succeeded = 0, failed = 0;
+
+  try {
+    const res = await fetch('/api/backfill', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'Accept':'text/event-stream' },
+      body: JSON.stringify({ tickers, days }),
+    });
+
+    // Parse SSE stream
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let buf      = '';
+
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const msg = JSON.parse(line.slice(5).trim());
+        if (msg.done) {
+          succeeded = msg.success?.length || 0;
+          failed    = msg.failed?.length  || 0;
+          $('bfResult').style.display   = '';
+          $('bfResult').textContent     = `✅ Done — ${succeeded} tickers backfilled, ${failed} failed. Pivots are now ready!`;
+          $('bfProgressBar').style.width = '100%';
+          $('bfProgressText').textContent = 'Complete!';
+          $('bfStartBtn').textContent   = 'Done';
+        } else {
+          done++;
+          const pct = Math.round(done / tickers.length * 100);
+          $('bfProgressBar').style.width  = pct + '%';
+          $('bfProgressText').textContent = `${msg.status === 'fetching' ? '⬇' : '✅'} ${msg.ticker} (${msg.i}/${msg.total})`;
+          const logLine = document.createElement('div');
+          logLine.textContent = `${msg.ticker}`;
+          if (msg.status !== 'fetching') logLine.style.color = '#3fb950';
+          $('bfLog').appendChild(logLine);
+          $('bfLog').scrollTop = $('bfLog').scrollHeight;
+        }
+      }
+    }
+  } catch(e) {
+    $('bfResult').style.display = '';
+    $('bfResult').style.color   = '#f85149';
+    $('bfResult').textContent   = '❌ Error: ' + e.message;
+    $('bfStartBtn').disabled    = false;
+    $('bfStartBtn').textContent = 'Retry';
+  }
+});
 
 // ── Pivots tab
 let pivotData = null;

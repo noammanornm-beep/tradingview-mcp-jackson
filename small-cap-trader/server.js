@@ -16,6 +16,7 @@ import { runScan }          from './scanner.js';
 import { saveScan, loadScan, listDates, getTickerHistory, getAllTickers } from './db.js';
 import { loadContinuations } from './continuations.js';
 import { calculatePivots, buildTVDrawCode } from './pivots.js';
+import { backfillTickers } from './backfill.js';
 import { getKeywordStats, addKeyword, removeKeyword, updateKeyword, recordOutcome } from './keywords.js';
 
 const CDP_PORT = 9222;
@@ -126,6 +127,43 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+  }
+
+  // ── POST /api/backfill  →  fetch historical data for tickers
+  if (url.pathname === '/api/backfill') {
+    if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
+
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      try {
+        const { tickers, days = 180 } = body ? JSON.parse(body) : {};
+        if (!tickers?.length) return json(res, { error: 'tickers array required' }, 400);
+
+        // Stream progress via SSE if requested
+        const sse = req.headers.accept === 'text/event-stream';
+        if (sse) {
+          res.writeHead(200, { 'Content-Type':'text/event-stream', 'Cache-Control':'no-cache', 'Access-Control-Allow-Origin':'*' });
+          const results = await backfillTickers(tickers, {}, days, (progress) => {
+            res.write(`data: ${JSON.stringify(progress)}\n\n`);
+          });
+          res.write(`data: ${JSON.stringify({ done: true, ...results })}\n\n`);
+          res.end();
+        } else {
+          const results = await backfillTickers(tickers, {}, days);
+          return json(res, results);
+        }
+      } catch(e) { return json(res, { error: e.message }, 500); }
+    });
+    return;
+  }
+
+  // ── GET /api/backfill-status  →  check what's been backfilled
+  if (url.pathname === '/api/backfill-status') {
+    const indexFile = path.join(__dirname, 'data', 'backfill-index.json');
+    if (!fs.existsSync(indexFile)) return json(res, {});
+    try { return json(res, JSON.parse(fs.readFileSync(indexFile, 'utf8'))); }
+    catch(e) { return json(res, { error: e.message }, 500); }
   }
 
   // ── GET /api/pivots?ticker=AAPL&price=5.50  →  calculate pivot levels
