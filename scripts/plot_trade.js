@@ -41,27 +41,64 @@ if (requestedSymbol && chartSymbolBefore.toUpperCase() !== requestedSymbol.toUpp
     })()
   `);
 }
+// Multiple partial fills routed to different venues for a single order
+// typically land within a couple seconds of each other -- one arrow per
+// fill there is just clutter. Cluster fills on the same side by actual time
+// gap: fills no more than 5 seconds apart are the same order (one arrow, at
+// their volume-weighted average price); a gap of more than 5 seconds starts
+// a new order (a new arrow), even if it's still within the same clock hour.
+const ORDER_GAP_SECONDS = 5;
+
+function groupLegsForPlotting(rawLegs) {
+  const bySide = {};
+  for (const leg of rawLegs) {
+    const ts = toTimestamp(leg.time);
+    if (ts == null || !Number.isFinite(Number(leg.price))) continue;
+    (bySide[leg.action] = bySide[leg.action] || []).push({ ...leg, ts });
+  }
+
+  const groups = [];
+  for (const side of Object.keys(bySide)) {
+    const sorted = bySide[side].slice().sort((a, b) => a.ts - b.ts);
+    let current = null;
+    let lastTs = null;
+    for (const leg of sorted) {
+      if (!current || lastTs == null || (leg.ts - lastTs) > ORDER_GAP_SECONDS) {
+        current = { action: side, time: leg.time, ts: leg.ts, qty: 0, priceQtySum: 0, fills: 0 };
+        groups.push(current);
+      }
+      const qty = Number(leg.qty) || 0;
+      current.qty += qty;
+      current.priceQtySum += Number(leg.price) * qty;
+      current.fills += 1;
+      lastTs = leg.ts;
+    }
+  }
+  return groups.map(g => ({ action: g.action, time: g.time, qty: g.qty, price: g.qty ? g.priceQtySum / g.qty : 0, fills: g.fills }));
+}
+
 const chartSymbol = await evaluate(`${chartApi}.symbol()`);
 const created = [];
 const before = await evaluate(`${chartApi}.getAllShapes().map(function(s) { return s.id; })`);
 
-for (const leg of legs) {
+for (const leg of groupLegsForPlotting(legs)) {
   const time = toTimestamp(leg.time);
-  if (!time || !Number.isFinite(Number(leg.price))) continue;
+  if (!time) continue;
   const isBuy = leg.action === 'BUY';
   const color = isBuy ? '#4af0a0' : '#f05060';
   const shape = isBuy ? 'arrow_up' : 'arrow_down';
-  const text = `[trade:${tradeId}] ${leg.action} ${leg.qty} @ ${Number(leg.price).toFixed(2)}`;
+  const fillsSuffix = leg.fills > 1 ? ` (${leg.fills} fills)` : '';
+  const text = `[trade:${tradeId}] ${leg.action} ${leg.qty} @ ${leg.price.toFixed(2)}${fillsSuffix}`;
   const result = await evaluate(`
     (function() {
       var api = ${chartApi};
       return api.createShape(
-        { time: ${time}, price: ${Number(leg.price)} },
+        { time: ${time}, price: ${leg.price} },
         { shape: '${shape}', text: ${JSON.stringify(text)}, overrides: { color: '${color}', textColor: '${color}' } }
       );
     })()
   `);
-  created.push({ action: leg.action, qty: leg.qty, price: leg.price, time, entity_id: result || null });
+  created.push({ action: leg.action, qty: leg.qty, price: leg.price, time, fills: leg.fills, entity_id: result || null });
 }
 
 const after = await evaluate(`${chartApi}.getAllShapes().map(function(s) { return s.id; })`);

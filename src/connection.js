@@ -6,6 +6,7 @@ const CDP_HOST = 'localhost';
 const CDP_PORT = 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
+const DEFAULT_CHART_URL = 'https://www.tradingview.com/chart';
 
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
@@ -72,9 +73,24 @@ async function findChartTarget() {
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
   // Prefer targets with tradingview.com/chart in the URL
-  return targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
-    || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url))
-    || null;
+  const existing = targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
+    || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url));
+  if (existing) return existing;
+
+  // No chart tab found -- either none is open (last one was closed) or
+  // Chrome's CDP target list is momentarily stale. Try opening one ourselves
+  // via the CDP HTTP endpoint before giving up; the outer retry loop in
+  // connect() will try findChartTarget() again if this attempt still fails.
+  try {
+    const opened = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/new?${encodeURIComponent(DEFAULT_CHART_URL)}`, { method: 'PUT' });
+    if (opened.ok) {
+      await new Promise(r => setTimeout(r, 3000)); // let the chart app boot
+      return await opened.json();
+    }
+  } catch {
+    // ignore -- fall through to null, outer retry loop handles it
+  }
+  return null;
 }
 
 export async function getTargetInfo() {
@@ -118,11 +134,17 @@ export async function disconnect() {
 // Callers use the returned string in their own evaluate() calls.
 
 async function verifyAndReturn(path, name) {
-  const exists = await evaluate(`typeof (${path}) !== 'undefined' && (${path}) !== null`);
-  if (!exists) {
-    throw new Error(`${name} not available at ${path}`);
+  // Poll instead of a single check -- a freshly opened/reloaded chart tab
+  // can take several seconds for TradingView's app bundle to initialize
+  // these globals, and failing on the first instant is a common source of
+  // spurious "not available" errors right after connect() opens a new tab.
+  const attempts = 10;
+  for (let i = 0; i < attempts; i++) {
+    const exists = await evaluate(`typeof (${path}) !== 'undefined' && (${path}) !== null`);
+    if (exists) return path;
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, 1000));
   }
-  return path;
+  throw new Error(`${name} not available at ${path}`);
 }
 
 export async function getChartApi() {
