@@ -32,15 +32,28 @@ function toTimestamp(value) {
 
 const chartApi = await getChartApi();
 const chartSymbolBefore = await evaluate(`${chartApi}.symbol()`);
-if (requestedSymbol && chartSymbolBefore.toUpperCase() !== requestedSymbol.toUpperCase() && !chartSymbolBefore.toUpperCase().endsWith(`:${requestedSymbol.toUpperCase()}`)) {
+// symbolExt() is null when the chart's symbol never resolved (e.g. "NASDAQ:BE" for an
+// NYSE stock) -- that chart has no bars and rejects every createShape, so reload it.
+const chartResolved = await evaluate(`!!${chartApi}.symbolExt()`);
+const sameTicker = chartSymbolBefore.toUpperCase() === requestedSymbol.toUpperCase() || chartSymbolBefore.toUpperCase().endsWith(`:${requestedSymbol.toUpperCase()}`);
+if (requestedSymbol && (!sameTicker || !chartResolved)) {
   await evaluateAsync(`
     (function() {
       var api = ${chartApi};
       api.setSymbol(${JSON.stringify(requestedSymbol)}, {});
-      return new Promise(function(resolve) { setTimeout(resolve, 1200); });
+      return new Promise(function(resolve) { setTimeout(resolve, 2500); });
     })()
   `);
 }
+// Journal times are New York wall-clock. A chart left on another display timezone
+// (it was Europe/Athens, UTC+3) shows a 10:08 fill at 17:08 and an after-hours fill on
+// the next day -- so put the chart on New York time before drawing.
+const chartTimezoneBefore = await evaluate(`(function() { try { return ${chartApi}.getTimezoneApi().getTimezone().id; } catch (e) { return null; } })()`);
+if (chartTimezoneBefore && chartTimezoneBefore !== 'America/New_York') {
+  await evaluate(`(function() { try { ${chartApi}.getTimezoneApi().setTimezone('America/New_York'); } catch (e) {} })()`);
+}
+const chartTimezone = await evaluate(`(function() { try { return ${chartApi}.getTimezoneApi().getTimezone().id; } catch (e) { return null; } })()`);
+
 // Multiple partial fills routed to different venues for a single order
 // typically land within a couple seconds of each other -- one arrow per
 // fill there is just clutter. Cluster fills on the same side by actual time
@@ -77,8 +90,73 @@ function groupLegsForPlotting(rawLegs) {
   return groups.map(g => ({ action: g.action, time: g.time, qty: g.qty, price: g.qty ? g.priceQtySum / g.qty : 0, fills: g.fills }));
 }
 
+// TradingView only keeps ~1 month of intraday bars loaded, and createShape snaps a
+// point older than the first loaded bar onto that bar -- so a July trade was drawn on
+// early September. Page history in (as scrolling left does) until it covers the trade.
+const legTimes = legs.map(leg => toTimestamp(leg.time)).filter(ts => ts != null);
+const tradeFrom = Math.min(...legTimes);
+const tradeTo = Math.max(...legTimes);
+const history = await evaluateAsync(`
+  (async function() {
+    var api = ${chartApi};
+    var model = api._chartWidget.model();
+    var series = model.mainSeries();
+    function firstBar() { var b = series.bars(); return b.size() ? b.valueAt(b.firstIndex())[0] : null; }
+    var started = Date.now();
+    while (!(firstBar() <= ${tradeFrom}) && Date.now() - started < 20000) {
+      var size = series.bars().size();
+      model.timeScale().scrollToFirstBar();
+      await new Promise(function(r) { setTimeout(r, 300); });
+      series.requestMoreData(2000);
+      var waited = Date.now();
+      while (series.bars().size() === size && Date.now() - waited < 5000) await new Promise(function(r) { setTimeout(r, 200); });
+      if (series.bars().size() === size) break;
+    }
+    var disconnected = Array.from(document.querySelectorAll('button')).some(function(b) { return b.textContent.trim() === 'Reconnect'; });
+    return { firstBar: firstBar(), covered: firstBar() !== null && firstBar() <= ${tradeFrom}, disconnected: disconnected };
+  })()
+`);
+if (!history.covered) {
+  const why = history.disconnected
+    ? 'TradingView lost its data connection -- click Reconnect in the TradingView tab and plot again'
+    : `chart history only goes back to ${new Date((history.firstBar || 0) * 1000).toISOString().slice(0, 10)}`;
+  console.error(`Cannot plot on the trade's dates: ${why}`);
+  await disconnect();
+  process.exit(1);
+}
+
+const resolution = String(await evaluate(`${chartApi}.resolution()`));
+// Bar length in seconds: "60" = 60 minutes, "30S" = 30 seconds, D/W/M = daily and up.
+const barSeconds = /S$/.test(resolution) ? Number(resolution.slice(0, -1)) || 1
+  : /^\d+$/.test(resolution) ? Number(resolution) * 60 : null;
+const intraday = barSeconds != null;
+const nyDate = ts => new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+// Show the trade: centre the chart on its bars with some context either side
+// (a day either side on daily charts; on intraday charts just the trade's bars).
+const zoomPad = intraday ? 0 : 86400;
+await evaluate(`
+  (function() {
+    var model = ${chartApi}._chartWidget.model();
+    var bars = model.mainSeries().bars();
+    var fromIdx = null, toIdx = null;
+    for (var i = bars.firstIndex(); i <= bars.lastIndex(); i++) {
+      var v = bars.valueAt(i);
+      if (!v) continue;
+      if (fromIdx === null && v[0] >= ${tradeFrom} - ${zoomPad}) fromIdx = i;
+      if (v[0] <= ${tradeTo} + ${zoomPad}) toIdx = i;
+    }
+    if (fromIdx !== null && toIdx !== null) model.timeScale().zoomToBarsRange(Math.max(bars.firstIndex(), fromIdx - 10), Math.min(bars.lastIndex(), toIdx + 10));
+  })()
+`);
+
 const chartSymbol = await evaluate(`${chartApi}.symbol()`);
+// Intraday: the arrow must sit on the bar that contains the fill (bar open <= fill time
+// < bar close). The old one-day tolerance let a pre-market fill on a regular-hours chart
+// snap onto the previous day's last bar and still count as plotted.
+const maxSnapSeconds = intraday ? barSeconds : /W$/.test(resolution) ? 8 * 86400 : /M$/.test(resolution) ? 32 * 86400 : 86400;
 const created = [];
+const failed = [];
 const before = await evaluate(`${chartApi}.getAllShapes().map(function(s) { return s.id; })`);
 
 for (const leg of groupLegsForPlotting(legs)) {
@@ -89,16 +167,36 @@ for (const leg of groupLegsForPlotting(legs)) {
   const shape = isBuy ? 'arrow_up' : 'arrow_down';
   const fillsSuffix = leg.fills > 1 ? ` (${leg.fills} fills)` : '';
   const text = `[trade:${tradeId}] ${leg.action} ${leg.qty} @ ${leg.price.toFixed(2)}${fillsSuffix}`;
-  const result = await evaluate(`
+  // createShape returns a Promise in current TradingView builds; it must be awaited, or a
+  // rejection ("Cannot create shape") is silently reported as a successful plot.
+  const result = await evaluateAsync(`
     (function() {
       var api = ${chartApi};
-      return api.createShape(
+      return Promise.resolve(api.createShape(
         { time: ${time}, price: ${leg.price} },
         { shape: '${shape}', text: ${JSON.stringify(text)}, overrides: { color: '${color}', textColor: '${color}' } }
-      );
+      )).then(function(id) { return { id: id }; }, function(err) { return { error: String((err && err.message) || err) }; });
     })()
   `);
-  created.push({ action: leg.action, qty: leg.qty, price: leg.price, time, fills: leg.fills, entity_id: result || null });
+  if (result && result.error) {
+    failed.push({ action: leg.action, price: leg.price, time, error: result.error });
+    continue;
+  }
+  // Check where the arrow actually landed: snapping to its own bar (within a day, or one
+  // bar on weekly/monthly charts) is normal; anything further was moved off the trade's date.
+  const placed = await evaluate(`(function() { try { return ${chartApi}.getShapeById(${JSON.stringify(result.id)}).getPoints()[0].time; } catch (e) { return null; } })()`);
+  const wrongBar = placed == null || Math.abs(time - placed) >= maxSnapSeconds || (intraday && placed > time);
+  // Daily bars are stamped 00:00 UTC of their session date, so read that date in UTC.
+  const placedDay = placed == null ? null : intraday ? nyDate(placed) : new Date(placed * 1000).toISOString().slice(0, 10);
+  const wrongDay = placed != null && !/[WM]$/.test(resolution) && placedDay !== nyDate(time);
+  if (wrongBar || wrongDay) {
+    await evaluate(`(function() { try { ${chartApi}.removeEntity(${JSON.stringify(result.id)}); } catch (e) {} })()`);
+    const at = placed == null ? 'nowhere' : intraday ? `${placedDay} ${new Date(placed * 1000).toLocaleTimeString('en-GB', { timeZone: 'America/New_York' })} ET` : `the ${placedDay} bar`;
+    const hint = intraday ? ' -- is the fill outside the chart session? turn on extended hours' : '';
+    failed.push({ action: leg.action, price: leg.price, time, trade_time: `${leg.time} ET`, error: `fill at ${leg.time} ET landed at ${at}${hint}` });
+    continue;
+  }
+  created.push({ action: leg.action, qty: leg.qty, price: leg.price, time, trade_time: `${leg.time} ET`, placed, fills: leg.fills, entity_id: result.id });
 }
 
 const after = await evaluate(`${chartApi}.getAllShapes().map(function(s) { return s.id; })`);
@@ -108,5 +206,9 @@ mkdirSync(dirname(registryPath), { recursive: true });
 const registry = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, 'utf8')) : {};
 registry[tradeId] = { symbol: chartSymbol, ids: markerIds, updated_at: new Date().toISOString() };
 writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-console.log(JSON.stringify({ chartSymbolBefore, chartSymbol, tradeId, plotted: created.length, marker_ids: markerIds, markers: created }));
+console.log(JSON.stringify({ chartSymbolBefore, chartSymbol, chartTimezoneBefore, chartTimezone, resolution, tradeId, plotted: created.length, marker_ids: markerIds, markers: created, failed }));
 await disconnect();
+if (failed.length) {
+  console.error(`${failed.length} of ${failed.length + created.length} markers could not be drawn on ${chartSymbol}: ${failed[0].error}`);
+  process.exit(1);
+}
