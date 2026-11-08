@@ -140,7 +140,8 @@ const nyDate = ts => new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone:
 // settled, so on 1m/5m charts the view was left at the very first loaded bar. Indexes are now
 // re-read on every attempt and the resulting view is read back. setVisibleRange is "Not
 // implemented" in this TradingView build.
-const PAD_BARS = 15;
+const PAD_BARS = 15;   // daily/weekly: bars of context either side of the trade
+const DAY_PAD_BARS = 3;  // intraday: bars of margin around the whole trading day
 async function zoomPane(modelExpr, paneIntraday) {
   for (let attempt = 0; attempt < 6; attempt++) {
     const ok = await evaluateAsync(`
@@ -158,10 +159,36 @@ async function zoomPane(modelExpr, paneIntraday) {
         }
         if (fromIdx === null || toIdx === null) return Promise.resolve(false);
         var lo = Math.max(bars.firstIndex(), fromIdx - ${PAD_BARS}), hi = toIdx + ${PAD_BARS};
+        if (${paneIntraday}) {
+          // Intraday panes show the WHOLE trading day of the trade (premarket to after-hours,
+          // New York date), not a narrow window around the fills.
+          var nyDay = function(t) { return new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); };
+          var dayA = nyDay(bars.valueAt(fromIdx)[0]), dayB = nyDay(bars.valueAt(toIdx)[0]);
+          var a = fromIdx, b = toIdx;
+          while (a - 1 >= bars.firstIndex() && bars.valueAt(a - 1) && nyDay(bars.valueAt(a - 1)[0]) === dayA) a--;
+          while (b + 1 <= bars.lastIndex() && bars.valueAt(b + 1) && nyDay(bars.valueAt(b + 1)[0]) === dayB) b++;
+          lo = Math.max(bars.firstIndex(), a - ${DAY_PAD_BARS}); hi = b + ${DAY_PAD_BARS};
+        }
         ts.zoomToBarsRange(lo, hi);
         // A pane left with auto-scale off (manual price drag) keeps the old price window, so the
         // candles would sit off-screen at the new time -- turn auto-scale back on.
         try { var ps = model.mainSeries().priceScale(); if (!ps.isAutoScale()) ps.resetScale(); } catch (e) {}
+        // Fit the price axis to the candles being shown. Auto-scale also counts indicator lines
+        // (e.g. levels at 35-44 on a $21 stock) and squashes the candles into a flat strip, so
+        // set the range from the visible bars' high/low instead.
+        try {
+          var lowest = Infinity, highest = -Infinity;
+          for (var j = Math.max(lo, bars.firstIndex()); j <= Math.min(hi, bars.lastIndex()); j++) {
+            var bar = bars.valueAt(j);
+            if (!bar) continue;
+            if (bar[3] < lowest) lowest = bar[3];
+            if (bar[2] > highest) highest = bar[2];
+          }
+          if (isFinite(lowest) && isFinite(highest)) {
+            var margin = Math.max((highest - lowest) * 0.12, highest * 0.002);
+            model.mainSeries().priceScale().setPriceRangeInPrice({ from: lowest - margin, to: highest + margin });
+          }
+        } catch (e) {}
         return new Promise(function(resolve) {
           setTimeout(function() {
             var r = ts.visibleBarsStrictRange();
