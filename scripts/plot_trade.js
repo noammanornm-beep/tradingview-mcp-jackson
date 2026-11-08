@@ -132,23 +132,48 @@ const barSeconds = /S$/.test(resolution) ? Number(resolution.slice(0, -1)) || 1
 const intraday = barSeconds != null;
 const nyDate = ts => new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-// Show the trade: centre the chart on its bars with some context either side
-// (a day either side on daily charts; on intraday charts just the trade's bars).
+// Show the trade: centre the chart on it with some context either side. Intraday: 15 bars
+// of padding (at least 10 minutes); daily and up: a day either side. The old zoomToBarsRange
+// call used bar indexes captured before the paged-in history settled, so on 1m/5m charts
+// the view was left at the very first loaded bar (04:00 of the first day) instead of the
+// trade. Time-based setVisibleRange + a read-back check fixes that.
 const zoomPad = intraday ? 0 : 86400;
-await evaluate(`
-  (function() {
-    var model = ${chartApi}._chartWidget.model();
-    var bars = model.mainSeries().bars();
-    var fromIdx = null, toIdx = null;
-    for (var i = bars.firstIndex(); i <= bars.lastIndex(); i++) {
-      var v = bars.valueAt(i);
-      if (!v) continue;
-      if (fromIdx === null && v[0] >= ${tradeFrom} - ${zoomPad}) fromIdx = i;
-      if (v[0] <= ${tradeTo} + ${zoomPad}) toIdx = i;
-    }
-    if (fromIdx !== null && toIdx !== null) model.timeScale().zoomToBarsRange(Math.max(bars.firstIndex(), fromIdx - 10), Math.min(bars.lastIndex(), toIdx + 10));
-  })()
-`);
+const padBars = intraday ? 15 : 10;
+async function zoomToTrade() {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    // Bar indexes are re-read on every attempt (late-loading history renumbers them) and the
+    // resulting view is read back; setVisibleRange is "Not implemented" in this build.
+    const ok = await evaluateAsync(`
+      (function() {
+        var model = ${chartApi}._chartWidget.model();
+        var ts = model.timeScale();
+        var bars = model.mainSeries().bars();
+        var fromIdx = null, toIdx = null;
+        for (var i = bars.firstIndex(); i <= bars.lastIndex(); i++) {
+          var v = bars.valueAt(i);
+          if (!v) continue;
+          if (fromIdx === null && v[0] >= ${tradeFrom} - ${zoomPad}) fromIdx = i;
+          if (v[0] <= ${tradeTo} + ${zoomPad}) toIdx = i;
+        }
+        if (fromIdx === null || toIdx === null) return Promise.resolve(false);
+        var lo = Math.max(bars.firstIndex(), fromIdx - ${padBars}), hi = Math.min(bars.lastIndex(), toIdx + ${padBars});
+        ts.zoomToBarsRange(lo, hi);
+        // A pane left with auto-scale off (manual price drag) keeps the old price window, so the
+        // candles sit off-screen at the new time -- turn auto-scale back on.
+        try { var ps = model.mainSeries().priceScale(); if (!ps.isAutoScale()) ps.resetScale(); } catch (e) {}
+        return new Promise(function(resolve) {
+          setTimeout(function() {
+            var r = ts.visibleBarsStrictRange();
+            resolve(!!r && r.firstBar() <= fromIdx && r.lastBar() >= toIdx);
+          }, 700);
+        });
+      })()
+    `);
+    if (ok) return true;
+  }
+  return false;
+}
+const zoomed = await zoomToTrade();
 
 const chartSymbol = await evaluate(`${chartApi}.symbol()`);
 // Intraday: the arrow must sit on the bar that contains the fill (bar open <= fill time
@@ -199,6 +224,7 @@ for (const leg of groupLegsForPlotting(legs)) {
   created.push({ action: leg.action, qty: leg.qty, price: leg.price, time, trade_time: `${leg.time} ET`, placed, fills: leg.fills, entity_id: result.id });
 }
 
+await zoomToTrade();   // late-loading history can shift the view again; re-assert it
 const after = await evaluate(`${chartApi}.getAllShapes().map(function(s) { return s.id; })`);
 const markerIds = (after || []).filter(id => !(before || []).includes(id));
 const registryPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'trade-markers.json');
@@ -206,7 +232,7 @@ mkdirSync(dirname(registryPath), { recursive: true });
 const registry = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, 'utf8')) : {};
 registry[tradeId] = { symbol: chartSymbol, ids: markerIds, updated_at: new Date().toISOString() };
 writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-console.log(JSON.stringify({ chartSymbolBefore, chartSymbol, chartTimezoneBefore, chartTimezone, resolution, tradeId, plotted: created.length, marker_ids: markerIds, markers: created, failed }));
+console.log(JSON.stringify({ chartSymbolBefore, chartSymbol, chartTimezoneBefore, chartTimezone, resolution, tradeId, plotted: created.length, zoomed, marker_ids: markerIds, markers: created, failed }));
 await disconnect();
 if (failed.length) {
   console.error(`${failed.length} of ${failed.length + created.length} markers could not be drawn on ${chartSymbol}: ${failed[0].error}`);
