@@ -96,10 +96,12 @@ function groupLegsForPlotting(rawLegs) {
 const legTimes = legs.map(leg => toTimestamp(leg.time)).filter(ts => ts != null);
 const tradeFrom = Math.min(...legTimes);
 const tradeTo = Math.max(...legTimes);
-const history = await evaluateAsync(`
+// modelExpr: JS expression for a pane's chart model (the active pane, or any pane of the layout).
+const ACTIVE_MODEL = `${chartApi}._chartWidget.model()`;
+const paneModel = i => `window.TradingViewApi._chartWidgetCollection.getAll()[${i}].model()`;
+const ensureHistory = modelExpr => evaluateAsync(`
   (async function() {
-    var api = ${chartApi};
-    var model = api._chartWidget.model();
+    var model = ${modelExpr};
     var series = model.mainSeries();
     function firstBar() { var b = series.bars(); return b.size() ? b.valueAt(b.firstIndex())[0] : null; }
     var started = Date.now();
@@ -116,6 +118,7 @@ const history = await evaluateAsync(`
     return { firstBar: firstBar(), covered: firstBar() !== null && firstBar() <= ${tradeFrom}, disconnected: disconnected };
   })()
 `);
+const history = await ensureHistory(ACTIVE_MODEL);
 if (!history.covered) {
   const why = history.disconnected
     ? 'TradingView lost its data connection -- click Reconnect in the TradingView tab and plot again'
@@ -132,34 +135,32 @@ const barSeconds = /S$/.test(resolution) ? Number(resolution.slice(0, -1)) || 1
 const intraday = barSeconds != null;
 const nyDate = ts => new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-// Show the trade: centre the chart on it with some context either side. Intraday: 15 bars
-// of padding (at least 10 minutes); daily and up: a day either side. The old zoomToBarsRange
-// call used bar indexes captured before the paged-in history settled, so on 1m/5m charts
-// the view was left at the very first loaded bar (04:00 of the first day) instead of the
-// trade. Time-based setVisibleRange + a read-back check fixes that.
-const zoomPad = intraday ? 0 : 86400;
-const padBars = intraday ? 15 : 10;
-async function zoomToTrade() {
+// Show the trade: centre a pane on it with context either side. Intraday panes pad with
+// bars; the old zoomToBarsRange call used bar indexes captured before the paged-in history
+// settled, so on 1m/5m charts the view was left at the very first loaded bar. Indexes are now
+// re-read on every attempt and the resulting view is read back. setVisibleRange is "Not
+// implemented" in this TradingView build.
+const PAD_BARS = 15;
+async function zoomPane(modelExpr, paneIntraday) {
   for (let attempt = 0; attempt < 6; attempt++) {
-    // Bar indexes are re-read on every attempt (late-loading history renumbers them) and the
-    // resulting view is read back; setVisibleRange is "Not implemented" in this build.
     const ok = await evaluateAsync(`
       (function() {
-        var model = ${chartApi}._chartWidget.model();
+        var model = ${modelExpr};
         var ts = model.timeScale();
         var bars = model.mainSeries().bars();
         var fromIdx = null, toIdx = null;
         for (var i = bars.firstIndex(); i <= bars.lastIndex(); i++) {
           var v = bars.valueAt(i);
           if (!v) continue;
-          if (fromIdx === null && v[0] >= ${tradeFrom} - ${zoomPad}) fromIdx = i;
-          if (v[0] <= ${tradeTo} + ${zoomPad}) toIdx = i;
+          // the bar CONTAINING the time (last bar opening at or before it) -- works for 1m up to weekly
+          if (v[0] <= ${tradeFrom}) fromIdx = i;
+          if (v[0] <= ${tradeTo}) toIdx = i;
         }
         if (fromIdx === null || toIdx === null) return Promise.resolve(false);
-        var lo = Math.max(bars.firstIndex(), fromIdx - ${padBars}), hi = Math.min(bars.lastIndex(), toIdx + ${padBars});
+        var lo = Math.max(bars.firstIndex(), fromIdx - ${PAD_BARS}), hi = toIdx + ${PAD_BARS};
         ts.zoomToBarsRange(lo, hi);
         // A pane left with auto-scale off (manual price drag) keeps the old price window, so the
-        // candles sit off-screen at the new time -- turn auto-scale back on.
+        // candles would sit off-screen at the new time -- turn auto-scale back on.
         try { var ps = model.mainSeries().priceScale(); if (!ps.isAutoScale()) ps.resetScale(); } catch (e) {}
         return new Promise(function(resolve) {
           setTimeout(function() {
@@ -173,7 +174,33 @@ async function zoomToTrade() {
   }
   return false;
 }
-const zoomed = await zoomToTrade();
+const zoomed = await zoomPane(ACTIVE_MODEL, intraday);
+
+// Every pane of a multi-chart layout (e.g. 2x2: 1h / 1m / D / W) gets shown on the trade,
+// centred, so the entry and exit can be read on all timeframes at once. Drawings sync across
+// panes on the same symbol, so the arrows only need to be created once.
+async function showOnAllPanes() {
+  const info = await evaluate(`
+    (function() {
+      var cwc = window.TradingViewApi._chartWidgetCollection;
+      var n = cwc.inlineChartsCount; if (n && typeof n.value === 'function') n = n.value();
+      var all = cwc.getAll(); var out = [];
+      for (var i = 0; i < Math.min(n || all.length, all.length); i++) {
+        try { var s = all[i].model().mainSeries(); out.push({ index: i, symbol: s.symbol(), resolution: String(s.interval()) }); } catch (e) {}
+      }
+      return out;
+    })()
+  `);
+  const results = [];
+  for (const pane of info || []) {
+    const res = pane.resolution;
+    const paneIntraday = /S$/.test(res) || /^\d+$/.test(res);
+    const covered = (await ensureHistory(paneModel(pane.index))).covered;
+    const ok = covered ? await zoomPane(paneModel(pane.index), paneIntraday) : false;
+    results.push({ index: pane.index, symbol: pane.symbol, resolution: res, covered, zoomed: ok });
+  }
+  return results;
+}
 
 const chartSymbol = await evaluate(`${chartApi}.symbol()`);
 // Intraday: the arrow must sit on the bar that contains the fill (bar open <= fill time
@@ -224,7 +251,7 @@ for (const leg of groupLegsForPlotting(legs)) {
   created.push({ action: leg.action, qty: leg.qty, price: leg.price, time, trade_time: `${leg.time} ET`, placed, fills: leg.fills, entity_id: result.id });
 }
 
-await zoomToTrade();   // late-loading history can shift the view again; re-assert it
+const panes = await showOnAllPanes();
 const after = await evaluate(`${chartApi}.getAllShapes().map(function(s) { return s.id; })`);
 const markerIds = (after || []).filter(id => !(before || []).includes(id));
 const registryPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'trade-markers.json');
@@ -232,7 +259,7 @@ mkdirSync(dirname(registryPath), { recursive: true });
 const registry = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, 'utf8')) : {};
 registry[tradeId] = { symbol: chartSymbol, ids: markerIds, updated_at: new Date().toISOString() };
 writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-console.log(JSON.stringify({ chartSymbolBefore, chartSymbol, chartTimezoneBefore, chartTimezone, resolution, tradeId, plotted: created.length, zoomed, marker_ids: markerIds, markers: created, failed }));
+console.log(JSON.stringify({ chartSymbolBefore, chartSymbol, chartTimezoneBefore, chartTimezone, resolution, tradeId, plotted: created.length, zoomed, panes, marker_ids: markerIds, markers: created, failed }));
 await disconnect();
 if (failed.length) {
   console.error(`${failed.length} of ${failed.length + created.length} markers could not be drawn on ${chartSymbol}: ${failed[0].error}`);
